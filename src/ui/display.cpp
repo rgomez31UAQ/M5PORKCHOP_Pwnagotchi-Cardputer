@@ -6,6 +6,7 @@
 #include "../core/config.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
+#include "../modes/oink.h"
 #include "menu.h"
 
 // Static member initialization
@@ -46,11 +47,16 @@ void Display::update() {
     
     switch (mode) {
         case PorkchopMode::IDLE:
-        case PorkchopMode::OINK_MODE:
-        case PorkchopMode::WARHOG_MODE:
             // Draw piglet avatar and mood
             Avatar::draw(mainCanvas);
             Mood::draw(mainCanvas);
+            break;
+            
+        case PorkchopMode::OINK_MODE:
+        case PorkchopMode::WARHOG_MODE:
+            // Draw piglet avatar and info line
+            Avatar::draw(mainCanvas);
+            drawModeInfo(mainCanvas, mode);
             break;
             
         case PorkchopMode::MENU:
@@ -60,10 +66,11 @@ void Display::update() {
             break;
             
         case PorkchopMode::SETTINGS:
-            // Settings screen
-            mainCanvas.setTextDatum(middle_center);
-            mainCanvas.setTextSize(2);
-            mainCanvas.drawString("SETTINGS", DISPLAY_W / 2, MAIN_H / 2);
+            drawSettingsScreen(mainCanvas);
+            break;
+            
+        case PorkchopMode::ABOUT:
+            drawAboutScreen(mainCanvas);
             break;
     }
     
@@ -117,6 +124,9 @@ void Display::drawTopBar() {
             break;
         case PorkchopMode::SETTINGS:
             modeStr = "CONFIG";
+            break;
+        case PorkchopMode::ABOUT:
+            modeStr = "ABOUT";
             break;
     }
     
@@ -273,4 +283,90 @@ void Display::setWiFiStatus(bool connected) {
 
 void Display::setMLStatus(bool active) {
     mlStatus = active;
+}
+
+// Helper functions for mode screens
+void Display::drawModeInfo(M5Canvas& canvas, PorkchopMode mode) {
+    canvas.setTextColor(COLOR_FG);
+    canvas.setTextDatum(top_left);
+    canvas.setTextSize(1);
+    
+    if (mode == PorkchopMode::OINK_MODE) {
+        // Show recent network info and handshake status
+        const auto& networks = OinkMode::getNetworks();
+        const auto& handshakes = OinkMode::getHandshakes();
+        
+        int y = MAIN_H - 35;
+        
+        if (!networks.empty()) {
+            // Show most recent network
+            const auto& net = networks.back();
+            char bssidStr[18];
+            snprintf(bssidStr, sizeof(bssidStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     net.bssid[0], net.bssid[1], net.bssid[2],
+                     net.bssid[3], net.bssid[4], net.bssid[5]);
+            
+            canvas.drawString(String(net.ssid).substring(0, 15), 2, y);
+            canvas.drawString("CH:" + String(net.channel) + " " + String(net.rssi) + "dB", DISPLAY_W - 60, y);
+            y += 10;
+            canvas.setTextColor(COLOR_ACCENT);
+            canvas.drawString(bssidStr, 2, y);
+        } else {
+            canvas.drawString("Scanning for networks...", 2, y);
+        }
+        
+        // Show handshake status
+        if (!handshakes.empty()) {
+            const auto& hs = handshakes.back();
+            canvas.setTextColor(COLOR_SUCCESS);
+            canvas.drawString("HS:" + String(OinkMode::getCompleteHandshakeCount()), DISPLAY_W - 35, y);
+        }
+    } else if (mode == PorkchopMode::WARHOG_MODE) {
+        // Show wardriving info
+        canvas.drawString("Wardriving mode active", 2, MAIN_H - 25);
+        canvas.drawString("Collecting GPS + WiFi data", 2, MAIN_H - 15);
+    }
+}
+
+void Display::drawSettingsScreen(M5Canvas& canvas) {
+    canvas.setTextColor(COLOR_FG);
+    canvas.setTextDatum(top_center);
+    canvas.setTextSize(1);
+    
+    canvas.drawString("=== SETTINGS ===", DISPLAY_W / 2, 5);
+    
+    canvas.setTextDatum(top_left);
+    int y = 20;
+    canvas.drawString("Sound: ON", 10, y); y += 12;
+    canvas.drawString("Brightness: 100%", 10, y); y += 12;
+    canvas.drawString("Auto-save HS: ON", 10, y); y += 12;
+    canvas.drawString("CH Hop: 100ms", 10, y); y += 12;
+    canvas.drawString("Deauth delay: 50ms", 10, y);
+    
+    canvas.setTextDatum(top_center);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.drawString("[Enter] to go back", DISPLAY_W / 2, MAIN_H - 12);
+}
+
+void Display::drawAboutScreen(M5Canvas& canvas) {
+    canvas.setTextColor(COLOR_FG);
+    canvas.setTextDatum(top_center);
+    canvas.setTextSize(1);
+    
+    canvas.drawString("=== ABOUT ===", DISPLAY_W / 2, 5);
+    
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.drawString("M5PORKCHOP", DISPLAY_W / 2, 25);
+    
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_FG);
+    canvas.drawString("by 0ct0", DISPLAY_W / 2, 48);
+    
+    canvas.setTextColor(COLOR_SUCCESS);
+    canvas.drawString("github.com/neledov", DISPLAY_W / 2, 65);
+    canvas.drawString("/M5Porkchop", DISPLAY_W / 2, 77);
+    
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.drawString("[Enter] to go back", DISPLAY_W / 2, MAIN_H - 12);
 }

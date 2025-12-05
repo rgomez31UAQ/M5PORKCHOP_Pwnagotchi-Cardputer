@@ -11,7 +11,8 @@ enum class PorkchopMode : uint8_t {
     OINK_MODE,      // Deauth + sniff mode
     WARHOG_MODE,    // Wardriving mode
     MENU,           // Menu navigation
-    SETTINGS        // Settings screen
+    SETTINGS,       // Settings screen
+    ABOUT           // About screen
 };
 
 // Events for async callbacks

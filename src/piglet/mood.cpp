@@ -102,6 +102,11 @@ void Mood::onHandshakeCaptured() {
     int idx = random(0, sizeof(PHRASES_EXCITED) / sizeof(PHRASES_EXCITED[0]));
     currentPhrase = PHRASES_EXCITED[idx];
     lastPhraseChange = millis();
+    
+    // Double beep for handshake! (user requested two beeps)
+    M5.Speaker.tone(1500, 100);  // First beep
+    delay(120);
+    M5.Speaker.tone(2000, 100);  // Second beep (higher pitch)
 }
 
 void Mood::onNewNetwork() {

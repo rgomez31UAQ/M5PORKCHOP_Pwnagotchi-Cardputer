@@ -50,7 +50,7 @@ void Porkchop::init() {
             case 1: setMode(PorkchopMode::OINK_MODE); break;
             case 2: setMode(PorkchopMode::WARHOG_MODE); break;
             case 3: setMode(PorkchopMode::SETTINGS); break;
-            case 4: break; // About - future
+            case 4: setMode(PorkchopMode::ABOUT); break;
         }
         Menu::clearSelected();
     });
@@ -142,6 +142,14 @@ void Porkchop::handleInput() {
             setMode(PorkchopMode::MENU);
         }
         return;
+    }
+    
+    // Enter key to go back from Settings/About
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+        if (currentMode == PorkchopMode::SETTINGS || currentMode == PorkchopMode::ABOUT) {
+            setMode(PorkchopMode::MENU);
+            return;
+        }
     }
     
     // Mode shortcuts when in IDLE or MENU

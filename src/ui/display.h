@@ -3,6 +3,9 @@
 
 #include <M5Unified.h>
 
+// Forward declarations
+enum class PorkchopMode : uint8_t;
+
 // Display layout constants (240x135 screen)
 #define DISPLAY_W 240
 #define DISPLAY_H 135
@@ -52,4 +55,7 @@ private:
     
     static void drawTopBar();
     static void drawBottomBar();
+    static void drawModeInfo(M5Canvas& canvas, PorkchopMode mode);
+    static void drawSettingsScreen(M5Canvas& canvas);
+    static void drawAboutScreen(M5Canvas& canvas);
 };
