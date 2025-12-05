@@ -146,12 +146,13 @@ void Display::drawBottomBar() {
     // Draw separator line
     bottomBar.drawLine(0, 0, DISPLAY_W, 0, COLOR_ACCENT);
     
-    // Left: stats - Networks and Deauths
+    // Left: stats - Networks, Handshakes, Deauths
     uint16_t netCount = porkchop.getNetworkCount();
+    uint16_t hsCount = porkchop.getHandshakeCount();
     uint16_t deauthCount = porkchop.getDeauthCount();
     
     bottomBar.setTextDatum(top_left);
-    String stats = "NET:" + String(netCount) + " DEAUTH:" + String(deauthCount);
+    String stats = "N:" + String(netCount) + " HS:" + String(hsCount) + " D:" + String(deauthCount);
     bottomBar.drawString(stats, 2, 3);
     
     // Right: uptime

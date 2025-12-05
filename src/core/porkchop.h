@@ -49,7 +49,7 @@ public:
     
     // Stats
     uint32_t getUptime() const;
-    uint16_t getHandshakeCount() const { return handshakeCount; }
+    uint16_t getHandshakeCount() const;  // Gets from OinkMode
     uint16_t getNetworkCount() const { return networkCount; }
     uint16_t getDeauthCount() const { return deauthCount; }
     

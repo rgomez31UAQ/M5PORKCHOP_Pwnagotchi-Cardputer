@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <vector>
+#include <FS.h>
 #include "../ml/features.h"
 
 struct DetectedNetwork {
@@ -18,15 +19,29 @@ struct DetectedNetwork {
     bool isTarget;
 };
 
+struct EAPOLFrame {
+    uint8_t data[512];
+    uint16_t len;
+    uint8_t messageNum;  // 1-4
+    uint32_t timestamp;
+};
+
 struct CapturedHandshake {
     uint8_t bssid[6];
     uint8_t station[6];
     char ssid[33];
-    uint8_t eapolData[512];
-    uint16_t eapolLen;
-    uint8_t messageNum;  // 1-4
-    uint32_t timestamp;
-    bool complete;
+    EAPOLFrame frames[4];  // M1, M2, M3, M4
+    uint8_t capturedMask;  // Bits 0-3 for M1-M4
+    uint32_t firstSeen;
+    uint32_t lastSeen;
+    bool saved;  // Already saved to SD
+    
+    bool hasM1() const { return capturedMask & 0x01; }
+    bool hasM2() const { return capturedMask & 0x02; }
+    bool hasM3() const { return capturedMask & 0x04; }
+    bool hasM4() const { return capturedMask & 0x08; }
+    bool isComplete() const { return hasM1() && hasM2(); }  // M1+M2 is enough for crack
+    bool isFull() const { return (capturedMask & 0x0F) == 0x0F; }
 };
 
 class OinkMode {
@@ -54,7 +69,10 @@ public:
     
     // Handshake capture
     static const std::vector<CapturedHandshake>& getHandshakes() { return handshakes; }
-    static bool saveHandshakes(const char* path);
+    static uint16_t getCompleteHandshakeCount();
+    static bool saveHandshakePCAP(const CapturedHandshake& hs, const char* path);
+    static bool saveAllHandshakes();
+    static void autoSaveCheck();
     
     // Channel hopping
     static void setChannel(uint8_t ch);
@@ -91,5 +109,7 @@ private:
     static void hopChannel();
     
     static int findNetwork(const uint8_t* bssid);
-    static void updateNetwork(int index, const wifi_ap_record_t* ap);
+    static int findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station);
+    static void writePCAPHeader(fs::File& f);
+    static void writePCAPPacket(fs::File& f, const uint8_t* data, uint16_t len, uint32_t ts);
 };

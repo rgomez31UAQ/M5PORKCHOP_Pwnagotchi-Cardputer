@@ -186,3 +186,7 @@ void Porkchop::updateMode() {
 uint32_t Porkchop::getUptime() const {
     return (millis() - startTime) / 1000;
 }
+
+uint16_t Porkchop::getHandshakeCount() const {
+    return OinkMode::getCompleteHandshakeCount();
+}

@@ -353,39 +353,218 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
     
     if (messageNum == 0) return;
     
-    // Capture handshake
-    CapturedHandshake hs = {0};
-    
-    // Determine which is AP (sender of M1/M3)
+    // Determine which is AP (sender of M1/M3) and station
+    uint8_t bssid[6], station[6];
     if (messageNum == 1 || messageNum == 3) {
-        memcpy(hs.bssid, srcMac, 6);
-        memcpy(hs.station, dstMac, 6);
+        memcpy(bssid, srcMac, 6);
+        memcpy(station, dstMac, 6);
     } else {
-        memcpy(hs.bssid, dstMac, 6);
-        memcpy(hs.station, srcMac, 6);
+        memcpy(bssid, dstMac, 6);
+        memcpy(station, srcMac, 6);
     }
     
-    hs.messageNum = messageNum;
-    hs.timestamp = millis();
+    // Find or create handshake entry
+    int hsIdx = findOrCreateHandshake(bssid, station);
+    if (hsIdx < 0) return;
+    
+    CapturedHandshake& hs = handshakes[hsIdx];
+    
+    // Store this frame
+    uint8_t frameIdx = messageNum - 1;
     uint16_t copyLen = min((uint16_t)512, len);
-    memcpy(hs.eapolData, payload, copyLen);
-    hs.eapolLen = copyLen;
+    memcpy(hs.frames[frameIdx].data, payload, copyLen);
+    hs.frames[frameIdx].len = copyLen;
+    hs.frames[frameIdx].messageNum = messageNum;
+    hs.frames[frameIdx].timestamp = millis();
     
-    // Look up SSID from networks
-    int netIdx = findNetwork(hs.bssid);
-    if (netIdx >= 0) {
-        strncpy(hs.ssid, networks[netIdx].ssid, 32);
+    // Update mask
+    hs.capturedMask |= (1 << frameIdx);
+    hs.lastSeen = millis();
+    
+    // Look up SSID from networks if not set
+    if (hs.ssid[0] == 0) {
+        int netIdx = findNetwork(bssid);
+        if (netIdx >= 0) {
+            strncpy(hs.ssid, networks[netIdx].ssid, 32);
+        }
     }
+    
+    Serial.printf("[OINK] EAPOL M%d captured! SSID:%s BSSID:%02X:%02X:%02X:%02X:%02X:%02X [%s%s%s%s]\n",
+                 messageNum, 
+                 hs.ssid[0] ? hs.ssid : "?",
+                 bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+                 hs.hasM1() ? "1" : "-",
+                 hs.hasM2() ? "2" : "-",
+                 hs.hasM3() ? "3" : "-",
+                 hs.hasM4() ? "4" : "-");
+    
+    // Trigger mood on capture
+    Mood::onHandshakeCaptured();
+    
+    // Auto-save if we got a complete handshake
+    if (hs.isComplete() && !hs.saved) {
+        autoSaveCheck();
+    }
+}
+
+int OinkMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station) {
+    // Look for existing handshake with same BSSID+station pair
+    for (int i = 0; i < (int)handshakes.size(); i++) {
+        if (memcmp(handshakes[i].bssid, bssid, 6) == 0 &&
+            memcmp(handshakes[i].station, station, 6) == 0) {
+            return i;
+        }
+    }
+    
+    // Create new entry
+    CapturedHandshake hs = {0};
+    memcpy(hs.bssid, bssid, 6);
+    memcpy(hs.station, station, 6);
+    hs.capturedMask = 0;
+    hs.firstSeen = millis();
+    hs.lastSeen = millis();
+    hs.saved = false;
     
     handshakes.push_back(hs);
+    return handshakes.size() - 1;
+}
+
+uint16_t OinkMode::getCompleteHandshakeCount() {
+    uint16_t count = 0;
+    for (const auto& hs : handshakes) {
+        if (hs.isComplete()) count++;
+    }
+    return count;
+}
+
+void OinkMode::autoSaveCheck() {
+    // Save any unsaved complete handshakes
+    for (auto& hs : handshakes) {
+        if (hs.isComplete() && !hs.saved) {
+            // Generate filename
+            char filename[64];
+            snprintf(filename, sizeof(filename), "/handshakes/%02X%02X%02X%02X%02X%02X.pcap",
+                    hs.bssid[0], hs.bssid[1], hs.bssid[2],
+                    hs.bssid[3], hs.bssid[4], hs.bssid[5]);
+            
+            // Ensure directory exists
+            if (!SD.exists("/handshakes")) {
+                SD.mkdir("/handshakes");
+            }
+            
+            if (saveHandshakePCAP(hs, filename)) {
+                hs.saved = true;
+                Serial.printf("[OINK] Handshake saved: %s\n", filename);
+            }
+        }
+    }
+}
+
+// PCAP file format structures
+#pragma pack(push, 1)
+struct PCAPHeader {
+    uint32_t magic;
+    uint16_t version_major;
+    uint16_t version_minor;
+    int32_t thiszone;
+    uint32_t sigfigs;
+    uint32_t snaplen;
+    uint32_t linktype;
+};
+
+struct PCAPPacketHeader {
+    uint32_t ts_sec;
+    uint32_t ts_usec;
+    uint32_t incl_len;
+    uint32_t orig_len;
+};
+#pragma pack(pop)
+
+void OinkMode::writePCAPHeader(fs::File& f) {
+    PCAPHeader hdr = {
+        .magic = 0xA1B2C3D4,      // PCAP magic
+        .version_major = 2,
+        .version_minor = 4,
+        .thiszone = 0,
+        .sigfigs = 0,
+        .snaplen = 65535,
+        .linktype = 105           // LINKTYPE_IEEE802_11 (802.11)
+    };
+    f.write((uint8_t*)&hdr, sizeof(hdr));
+}
+
+void OinkMode::writePCAPPacket(fs::File& f, const uint8_t* data, uint16_t len, uint32_t ts) {
+    PCAPPacketHeader pkt = {
+        .ts_sec = ts / 1000,
+        .ts_usec = (ts % 1000) * 1000,
+        .incl_len = len,
+        .orig_len = len
+    };
+    f.write((uint8_t*)&pkt, sizeof(pkt));
+    f.write(data, len);
+}
+
+bool OinkMode::saveHandshakePCAP(const CapturedHandshake& hs, const char* path) {
+    File f = SD.open(path, FILE_WRITE);
+    if (!f) {
+        Serial.printf("[OINK] Failed to create PCAP: %s\n", path);
+        return false;
+    }
     
-    Serial.printf("[OINK] EAPOL M%d captured! BSSID: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                 messageNum, hs.bssid[0], hs.bssid[1], hs.bssid[2],
-                 hs.bssid[3], hs.bssid[4], hs.bssid[5]);
+    writePCAPHeader(f);
     
-    // Check if we have complete handshake (M1+M2 or M2+M3)
-    // For simplicity, trigger mood on any capture
-    Mood::onHandshakeCaptured();
+    // Build 802.11 data frame + EAPOL for each captured message
+    // We need to reconstruct the full frame for PCAP
+    
+    for (int i = 0; i < 4; i++) {
+        if (!(hs.capturedMask & (1 << i))) continue;
+        
+        const EAPOLFrame& frame = hs.frames[i];
+        if (frame.len == 0) continue;
+        
+        // Build fake 802.11 Data frame header + LLC/SNAP + EAPOL
+        uint8_t pkt[600];
+        uint16_t pktLen = 0;
+        
+        // 802.11 Data frame header (24 bytes)
+        pkt[0] = 0x08; pkt[1] = 0x02;  // Data frame, ToDS=1
+        pkt[2] = 0x00; pkt[3] = 0x00;  // Duration
+        
+        // Addresses depend on message direction
+        if (i == 0 || i == 2) {  // M1, M3: AP->Station
+            memcpy(pkt + 4, hs.station, 6);   // DA
+            memcpy(pkt + 10, hs.bssid, 6);    // BSSID
+            memcpy(pkt + 16, hs.bssid, 6);    // SA
+        } else {  // M2, M4: Station->AP
+            memcpy(pkt + 4, hs.bssid, 6);     // DA (BSSID)
+            memcpy(pkt + 10, hs.bssid, 6);    // BSSID
+            memcpy(pkt + 16, hs.station, 6);  // SA
+        }
+        
+        pkt[22] = 0x00; pkt[23] = 0x00;  // Sequence
+        pktLen = 24;
+        
+        // LLC/SNAP header (8 bytes)
+        pkt[24] = 0xAA; pkt[25] = 0xAA; pkt[26] = 0x03;
+        pkt[27] = 0x00; pkt[28] = 0x00; pkt[29] = 0x00;
+        pkt[30] = 0x88; pkt[31] = 0x8E;  // EAPOL ethertype
+        pktLen = 32;
+        
+        // EAPOL data
+        memcpy(pkt + 32, frame.data, frame.len);
+        pktLen += frame.len;
+        
+        writePCAPPacket(f, pkt, pktLen, frame.timestamp);
+    }
+    
+    f.close();
+    return true;
+}
+
+bool OinkMode::saveAllHandshakes() {
+    bool success = true;
+    autoSaveCheck();  // This saves any unsaved ones
+    return success;
 }
 
 void OinkMode::sendDeauthFrame(const uint8_t* bssid, const uint8_t* station, uint8_t reason) {
@@ -418,31 +597,4 @@ int OinkMode::findNetwork(const uint8_t* bssid) {
         }
     }
     return -1;
-}
-
-bool OinkMode::saveHandshakes(const char* path) {
-    // Save in hashcat format (PCAP or hccapx)
-    // This is a placeholder - full implementation would use proper format
-    
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) {
-        Serial.printf("[OINK] Failed to save handshakes to %s\n", path);
-        return false;
-    }
-    
-    // Write simple dump for now
-    for (const auto& hs : handshakes) {
-        f.printf("SSID:%s BSSID:%02X%02X%02X%02X%02X%02X M%d\n",
-                hs.ssid,
-                hs.bssid[0], hs.bssid[1], hs.bssid[2],
-                hs.bssid[3], hs.bssid[4], hs.bssid[5],
-                hs.messageNum);
-        // Write raw EAPOL data
-        f.write(hs.eapolData, hs.eapolLen);
-        f.println();
-    }
-    
-    f.close();
-    Serial.printf("[OINK] Saved %d handshakes to %s\n", handshakes.size(), path);
-    return true;
 }
