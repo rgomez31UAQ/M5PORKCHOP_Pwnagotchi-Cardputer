@@ -792,11 +792,9 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
                  hs.hasM3() ? "3" : "-",
                  hs.hasM4() ? "4" : "-");
     
-    // Trigger mood on capture with AP name
-    Mood::onHandshakeCaptured(hs.ssid);
-    
-    // Auto-save if we got a complete handshake
+    // Only trigger mood + beep when handshake becomes complete (not for each frame)
     if (hs.isComplete() && !hs.saved) {
+        Mood::onHandshakeCaptured(hs.ssid);
         autoSaveCheck();
     }
 }

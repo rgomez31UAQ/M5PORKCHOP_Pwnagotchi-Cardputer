@@ -50,6 +50,7 @@ struct PersonalityConfig {
     float aggression = 0.3f;
     float patience = 0.5f;
     bool soundEnabled = true;
+    uint8_t brightness = 80;            // Display brightness 0-100%
 };
 
 class Config {

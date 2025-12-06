@@ -35,6 +35,10 @@ void setup() {
     
     // Init display system
     Display::init();
+    
+    // Apply saved brightness
+    M5.Display.setBrightness(Config::personality().brightness * 255 / 100);
+    
     Display::showProgress("Booting...", 10);
     
     // Initialize piglet personality

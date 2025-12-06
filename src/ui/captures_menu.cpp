@@ -23,6 +23,7 @@ void CapturesMenu::show() {
     active = true;
     selectedIndex = 0;
     scrollOffset = 0;
+    keyWasPressed = true;  // Ignore the Enter that selected us from menu
     scanCaptures();
 }
 

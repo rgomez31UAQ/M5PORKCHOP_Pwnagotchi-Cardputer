@@ -40,7 +40,7 @@ private:
     static MenuCallback callback;
     static bool keyWasPressed;  // Debounce tracking
     
-    static const uint8_t VISIBLE_ITEMS = 5;  // Fits without nav instructions
+    static const uint8_t VISIBLE_ITEMS = 4;  // Fits without nav instructions
     
     static void handleInput();
 };

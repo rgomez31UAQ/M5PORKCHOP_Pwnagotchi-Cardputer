@@ -33,7 +33,7 @@ void SettingsMenu::loadFromConfig() {
     items.push_back({
         "Brightness",
         SettingType::VALUE,
-        100,  // TODO: Read from display
+        (int)Config::personality().brightness,
         10, 100, 10, "%"
     });
     
@@ -94,12 +94,13 @@ void SettingsMenu::loadFromConfig() {
 }
 
 void SettingsMenu::saveToConfig() {
-    // Sound
+    // Sound and Brightness
     auto& p = Config::personality();
     p.soundEnabled = items[0].value == 1;
+    p.brightness = items[1].value;
     Config::setPersonality(p);
     
-    // Brightness - set display directly
+    // Apply brightness to display
     M5.Display.setBrightness(items[1].value * 255 / 100);
     
     // WiFi settings
@@ -126,6 +127,7 @@ void SettingsMenu::show() {
     selectedIndex = 0;
     scrollOffset = 0;
     editing = false;
+    keyWasPressed = true;  // Ignore the Enter that selected us from menu
     loadFromConfig();
 }
 
