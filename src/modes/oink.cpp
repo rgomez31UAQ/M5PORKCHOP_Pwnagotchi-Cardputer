@@ -406,7 +406,6 @@ void IRAM_ATTR OinkMode::promiscuousCallback(void* buf, wifi_promiscuous_pkt_typ
     packetCount++;
     
     const uint8_t* payload = pkt->payload;
-    uint8_t frameType = (payload[0] >> 2) & 0x03;
     uint8_t frameSubtype = (payload[0] >> 4) & 0x0F;
     
     switch (type) {
@@ -673,7 +672,6 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
     
     // Key info at offset 5-6
     uint16_t keyInfo = (payload[5] << 8) | payload[6];
-    uint8_t keyType = (keyInfo >> 3) & 0x01;  // 0=Group, 1=Pairwise
     uint8_t install = (keyInfo >> 6) & 0x01;
     uint8_t keyAck = (keyInfo >> 7) & 0x01;
     uint8_t keyMic = (keyInfo >> 8) & 0x01;
@@ -731,6 +729,7 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
         int netIdx = findNetwork(bssid);
         if (netIdx >= 0) {
             strncpy(hs.ssid, networks[netIdx].ssid, 32);
+            hs.ssid[32] = 0;  // Ensure null termination
         }
     }
     
@@ -887,16 +886,20 @@ bool OinkMode::saveHandshakePCAP(const CapturedHandshake& hs, const char* path) 
         uint16_t pktLen = 0;
         
         // 802.11 Data frame header (24 bytes)
-        pkt[0] = 0x08; pkt[1] = 0x02;  // Data frame, ToDS=1
+        // Frame Control: Type=Data(0x08), Flags in byte[1]
+        // Byte[1] bits: ToDS=bit0, FromDS=bit1
+        pkt[0] = 0x08;
         pkt[2] = 0x00; pkt[3] = 0x00;  // Duration
         
         // Addresses depend on message direction
-        if (i == 0 || i == 2) {  // M1, M3: AP->Station
+        if (i == 0 || i == 2) {  // M1, M3: AP->Station (FromDS=1, ToDS=0)
+            pkt[1] = 0x02;  // FromDS=1, ToDS=0
             memcpy(pkt + 4, hs.station, 6);   // DA
             memcpy(pkt + 10, hs.bssid, 6);    // BSSID
             memcpy(pkt + 16, hs.bssid, 6);    // SA
-        } else {  // M2, M4: Station->AP
-            memcpy(pkt + 4, hs.bssid, 6);     // DA (BSSID)
+        } else {  // M2, M4: Station->AP (ToDS=1, FromDS=0)
+            pkt[1] = 0x01;  // ToDS=1, FromDS=0
+            memcpy(pkt + 4, hs.bssid, 6);     // BSSID (DA)
             memcpy(pkt + 10, hs.bssid, 6);    // BSSID
             memcpy(pkt + 16, hs.station, 6);  // SA
         }
@@ -1063,7 +1066,6 @@ bool OinkMode::detectPMF(const uint8_t* payload, uint16_t len) {
             // IEEE 802.11-2016 standard:
             // Bit 6: MFPC (Management Frame Protection Capable)
             // Bit 7: MFPR (Management Frame Protection Required)
-            bool mfpc = (rsnCaps >> 6) & 0x01;
             bool mfpr = (rsnCaps >> 7) & 0x01;
             
             if (mfpr) {
