@@ -21,6 +21,13 @@ public:
     static void onGPSLost();
     static void onLowBattery();
     
+    // Context-aware mood updates
+    static void onSniffing(uint16_t networkCount, uint8_t channel);
+    static void onDeauthing(const char* apName, uint32_t deauthCount);
+    static void onIdle();
+    static void onWarhogUpdate();
+    static void onWarhogFound(const char* apName = nullptr, uint8_t channel = 0);
+    
     // Get current mood phrase
     static const String& getCurrentPhrase();
     static int getCurrentHappiness();

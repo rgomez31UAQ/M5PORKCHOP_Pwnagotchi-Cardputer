@@ -1,0 +1,50 @@
+// Settings menu system
+#pragma once
+
+#include <Arduino.h>
+#include <M5Unified.h>
+#include <vector>
+
+enum class SettingType {
+    TOGGLE,     // ON/OFF
+    VALUE,      // Numeric value with min/max
+    ACTION      // Trigger action (like Save)
+};
+
+struct SettingItem {
+    String label;
+    SettingType type;
+    int value;
+    int minVal;
+    int maxVal;
+    int step;
+    String suffix;  // %, ms, etc.
+};
+
+class SettingsMenu {
+public:
+    static void init();
+    static void update();
+    static void draw(M5Canvas& canvas);
+    
+    static void show();
+    static void hide();
+    static bool isActive() { return active; }
+    static bool shouldExit() { return exitRequested; }
+    static void clearExit() { exitRequested = false; }
+    
+private:
+    static std::vector<SettingItem> items;
+    static uint8_t selectedIndex;
+    static uint8_t scrollOffset;
+    static bool active;
+    static bool exitRequested;
+    static bool keyWasPressed;
+    static bool editing;  // Currently adjusting a value
+    
+    static const uint8_t VISIBLE_ITEMS = 5;
+    
+    static void handleInput();
+    static void loadFromConfig();
+    static void saveToConfig();
+};

@@ -68,6 +68,33 @@ const char* PHRASES_IDLE[] = {
     "What's cooking?"
 };
 
+// WARHOG wardriving phrases
+const char* PHRASES_WARHOG[] = {
+    "Road trippin'~",
+    "GPS locked! OINK!",
+    "Mapping the hood!",
+    "Drive-by WiFi!",
+    "Cruisin' for APs",
+    "Hog on wheels!",
+    "Surveying turf...",
+    "Snout on the road",
+    "WiFi safari!",
+    "Collecting coords~",
+    "Piggy road rage!",
+    "Vroom vroom oink!"
+};
+
+const char* PHRASES_WARHOG_FOUND[] = {
+    "New AP mapped!",
+    "Added to the map!",
+    "GPS + WiFi = <3",
+    "Another one!",
+    "Logged & tagged!",
+    "Oink! Coordinates!",
+    "On the grid now!",
+    "Marked the spot!"
+};
+
 void Mood::init() {
     currentPhrase = "OINK!";
     happiness = 50;
@@ -228,8 +255,10 @@ void Mood::selectPhrase() {
     int count;
     
     if (happiness > 70) {
-        phrases = PHRASES_EXCITED;
-        count = sizeof(PHRASES_EXCITED) / sizeof(PHRASES_EXCITED[0]);
+        // High happiness but not from handshake - use HAPPY not EXCITED
+        // EXCITED phrases reserved for actual handshake captures
+        phrases = PHRASES_HAPPY;
+        count = sizeof(PHRASES_HAPPY) / sizeof(PHRASES_HAPPY[0]);
     } else if (happiness > 30) {
         phrases = PHRASES_HAPPY;
         count = sizeof(PHRASES_HAPPY) / sizeof(PHRASES_HAPPY[0]);
@@ -265,12 +294,12 @@ void Mood::updateAvatarState() {
 void Mood::draw(M5Canvas& canvas) {
     // Calculate bubble size based on message length
     String phrase = currentPhrase;
-    int maxCharsPerLine = 16;
+    int maxCharsPerLine = 14;  // Slightly less chars for padding
     int numLines = 1;
     if (phrase.length() > maxCharsPerLine) numLines = 2;
     if (phrase.length() > maxCharsPerLine * 2) numLines = 3;
     
-    int bubbleX = 115;  // Start of bubble (after bigger piglet)
+    int bubbleX = 125;  // Moved left to prevent overflow
     int bubbleY = 3;
     int bubbleW = DISPLAY_W - bubbleX - 4;
     int bubbleH = 14 + (numLines * 14);  // Dynamic height based on lines
@@ -278,17 +307,17 @@ void Mood::draw(M5Canvas& canvas) {
     // Cap bubble height to fit screen
     if (bubbleH > MAIN_H - 10) bubbleH = MAIN_H - 10;
     
-    // Draw bubble outline
-    canvas.drawRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 6, COLOR_FG);
+    // Draw filled bubble with pink background
+    canvas.fillRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 6, COLOR_FG);
     
-    // Draw < arrow pointing to piglet
+    // Draw < arrow pointing to piglet (filled triangle would be better but text works)
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_FG);
     canvas.drawString("<", bubbleX - 6, bubbleY + bubbleH / 2 - 4);
     
-    // Draw phrase inside bubble with word wrapping
+    // Draw phrase inside bubble with word wrapping - BLACK text on pink
     canvas.setTextDatum(top_left);
-    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextColor(COLOR_BG);  // Black text
     
     int textX = bubbleX + 6;
     int textY = bubbleY + 6;
@@ -319,4 +348,98 @@ const String& Mood::getCurrentPhrase() {
 
 int Mood::getCurrentHappiness() {
     return happiness;
+}
+
+// Sniffing phrases
+const char* PHRASES_SNIFFING[] = {
+    "Sniff sniff...",
+    "*snort* *snort*",
+    "Nose to ground!",
+    "Smells like WiFi~",
+    "Oinking around...",
+    "Hunting truffles...",
+    "Snout active!",
+    "On the scent..."
+};
+
+// Deauth/digging phrases
+const char* PHRASES_DEAUTH[] = {
+    "Digging up %s!",
+    "Truffle found! %s",
+    "Rooting at %s~",
+    "*dig* *dig* %s",
+    "Uprooting %s!",
+    "Shaking %s loose!",
+    "Poking %s hard!",
+    "Snout attack! %s"
+};
+
+// Idle phrases (non-misleading)
+const char* PHRASES_MENU_IDLE[] = {
+    "Ready to hunt!",
+    "Press [O] OINK",
+    "Press [W] WARHOG",
+    "Porkchop ready!",
+    "Waiting orders...",
+    "Oink? Oink?",
+    "Choose a mode!",
+    "Let's go hunting!"
+};
+
+void Mood::onSniffing(uint16_t networkCount, uint8_t channel) {
+    lastActivityTime = millis();
+    
+    // Randomly pick sniffing phrase with channel info
+    int idx = random(0, sizeof(PHRASES_SNIFFING) / sizeof(PHRASES_SNIFFING[0]));
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s CH%d (%d APs)", PHRASES_SNIFFING[idx], channel, networkCount);
+    currentPhrase = buf;
+    lastPhraseChange = millis();
+}
+
+void Mood::onDeauthing(const char* apName, uint32_t deauthCount) {
+    lastActivityTime = millis();
+    
+    String ap = apName ? String(apName) : "target";
+    if (ap.length() > 10) ap = ap.substring(0, 10) + "..";
+    
+    int idx = random(0, sizeof(PHRASES_DEAUTH) / sizeof(PHRASES_DEAUTH[0]));
+    char buf[64];
+    snprintf(buf, sizeof(buf), PHRASES_DEAUTH[idx], ap.c_str());
+    
+    // Append deauth count every 5th update
+    if (deauthCount % 50 == 0 && deauthCount > 0) {
+        String msg = String(buf) + " [" + String(deauthCount) + "]";
+        currentPhrase = msg;
+    } else {
+        currentPhrase = buf;
+    }
+    lastPhraseChange = millis();
+}
+
+void Mood::onIdle() {
+    int idx = random(0, sizeof(PHRASES_MENU_IDLE) / sizeof(PHRASES_MENU_IDLE[0]));
+    currentPhrase = PHRASES_MENU_IDLE[idx];
+    lastPhraseChange = millis();
+}
+
+void Mood::onWarhogUpdate() {
+    lastActivityTime = millis();
+    int idx = random(0, sizeof(PHRASES_WARHOG) / sizeof(PHRASES_WARHOG[0]));
+    currentPhrase = PHRASES_WARHOG[idx];
+    lastPhraseChange = millis();
+}
+
+void Mood::onWarhogFound(const char* apName, uint8_t channel) {
+    lastActivityTime = millis();
+    happiness = min(100, happiness + 5);
+    
+    int idx = random(0, sizeof(PHRASES_WARHOG_FOUND) / sizeof(PHRASES_WARHOG_FOUND[0]));
+    String ap = apName ? String(apName) : "AP";
+    if (ap.length() > 10) ap = ap.substring(0, 10) + "..";
+    
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s CH%d", PHRASES_WARHOG_FOUND[idx], channel);
+    currentPhrase = buf;
+    lastPhraseChange = millis();
 }

@@ -82,6 +82,13 @@ public:
     // Statistics
     static uint32_t getPacketCount() { return packetCount; }
     static uint32_t getDeauthCount() { return deauthCount; }
+    static uint16_t getNetworkCount() { return networks.size(); }
+    
+    // Network selection cursor
+    static int getSelectionIndex() { return selectionIndex; }
+    static void moveSelectionUp();
+    static void moveSelectionDown();
+    static void confirmSelection();
     
 private:
     static bool running;
@@ -95,6 +102,7 @@ private:
     static std::vector<DetectedNetwork> networks;
     static std::vector<CapturedHandshake> handshakes;
     static int targetIndex;
+    static int selectionIndex;  // Cursor for network selection
     static uint32_t packetCount;
     static uint32_t deauthCount;
     

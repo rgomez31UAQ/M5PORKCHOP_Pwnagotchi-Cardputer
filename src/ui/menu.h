@@ -38,6 +38,7 @@ private:
     static bool active;
     static bool selected;
     static MenuCallback callback;
+    static bool keyWasPressed;  // Debounce tracking
     
     static const uint8_t VISIBLE_ITEMS = 4;  // Fewer items for bigger font
     

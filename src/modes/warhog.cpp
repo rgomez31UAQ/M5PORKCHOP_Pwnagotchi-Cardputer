@@ -51,6 +51,7 @@ void WarhogMode::start() {
     newCount = 0;
     
     Display::setWiFiStatus(true);
+    Mood::onWarhogUpdate();  // Show WARHOG phrase on start
     Serial.println("[WARHOG] Running");
 }
 
@@ -75,6 +76,13 @@ void WarhogMode::update() {
     if (!running) return;
     
     uint32_t now = millis();
+    static uint32_t lastPhraseTime = 0;
+    
+    // Rotate phrases every 5 seconds when idle
+    if (now - lastPhraseTime >= 5000) {
+        Mood::onWarhogUpdate();
+        lastPhraseTime = now;
+    }
     
     // Periodic scanning
     if (now - lastScanTime >= scanInterval) {
@@ -188,7 +196,8 @@ void WarhogMode::processScanResults() {
     newCount = entries.size() - previousCount;
     
     if (newCount > 0) {
-        Mood::onNewNetwork();
+        // Use WARHOG-specific phrases for found networks
+        Mood::onWarhogFound(nullptr, WiFi.channel());
     }
     
     WiFi.scanDelete();

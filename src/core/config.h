@@ -34,7 +34,7 @@ struct WiFiConfig {
     uint16_t channelHopInterval = 500;
     uint16_t scanDuration = 2000;
     uint16_t maxNetworks = 50;
-    bool enableDeauth = false;
+    bool enableDeauth = true;
     String otaSSID = "";
     String otaPassword = "";
     bool autoConnect = false;

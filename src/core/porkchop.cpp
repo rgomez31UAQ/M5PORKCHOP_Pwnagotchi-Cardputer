@@ -4,6 +4,7 @@
 #include <M5Cardputer.h>
 #include "../ui/display.h"
 #include "../ui/menu.h"
+#include "../ui/settings_menu.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
@@ -69,7 +70,12 @@ void Porkchop::update() {
 void Porkchop::setMode(PorkchopMode mode) {
     if (mode == currentMode) return;
     
-    previousMode = currentMode;
+    // Only save "real" modes as previous (not SETTINGS/ABOUT/MENU)
+    if (currentMode != PorkchopMode::SETTINGS && 
+        currentMode != PorkchopMode::ABOUT && 
+        currentMode != PorkchopMode::MENU) {
+        previousMode = currentMode;
+    }
     currentMode = mode;
     
     // Cleanup previous mode
@@ -91,6 +97,7 @@ void Porkchop::setMode(PorkchopMode mode) {
     switch (currentMode) {
         case PorkchopMode::IDLE:
             Avatar::setState(AvatarState::NEUTRAL);
+            Mood::onIdle();
             break;
         case PorkchopMode::OINK_MODE:
             Avatar::setState(AvatarState::HUNTING);
@@ -104,6 +111,7 @@ void Porkchop::setMode(PorkchopMode mode) {
             Menu::show();
             break;
         case PorkchopMode::SETTINGS:
+            SettingsMenu::show();
             break;
     }
     
@@ -134,26 +142,46 @@ void Porkchop::handleInput() {
     
     auto keys = M5Cardputer.Keyboard.keysState();
     
-    // Menu toggle with backtick
-    if (M5Cardputer.Keyboard.isKeyPressed('`')) {
-        if (currentMode == PorkchopMode::MENU) {
+    // In MENU mode, only handle backtick to exit
+    // Let Menu::handleInput() process navigation keys
+    if (currentMode == PorkchopMode::MENU) {
+        if (M5Cardputer.Keyboard.isKeyPressed('`')) {
             setMode(previousMode);
-        } else {
+        }
+        // Do NOT return here - let Menu::update() handle navigation
+        // But we already consumed isChange(), so Menu won't see it
+        // Instead, call Menu::update() directly here
+        Menu::update();
+        return;
+    }
+    
+    // In SETTINGS mode, let SettingsMenu handle everything
+    if (currentMode == PorkchopMode::SETTINGS) {
+        // Check if settings wants to exit
+        if (SettingsMenu::shouldExit()) {
+            SettingsMenu::clearExit();
+            SettingsMenu::hide();
             setMode(PorkchopMode::MENU);
         }
         return;
     }
     
-    // Enter key to go back from Settings/About
+    // Menu toggle with backtick
+    if (M5Cardputer.Keyboard.isKeyPressed('`')) {
+        setMode(PorkchopMode::MENU);
+        return;
+    }
+    
+    // Enter key to go back from About
     if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-        if (currentMode == PorkchopMode::SETTINGS || currentMode == PorkchopMode::ABOUT) {
+        if (currentMode == PorkchopMode::ABOUT) {
             setMode(PorkchopMode::MENU);
             return;
         }
     }
     
-    // Mode shortcuts when in IDLE or MENU
-    if (currentMode == PorkchopMode::IDLE || currentMode == PorkchopMode::MENU) {
+    // Mode shortcuts when in IDLE
+    if (currentMode == PorkchopMode::IDLE) {
         for (auto c : keys.word) {
             switch (c) {
                 case 'o': // Oink mode
@@ -172,7 +200,15 @@ void Porkchop::handleInput() {
         }
     }
     
-    // ESC to return to idle
+    // OINK mode - Backspace to stop and return to idle
+    if (currentMode == PorkchopMode::OINK_MODE) {
+        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+            setMode(PorkchopMode::IDLE);
+            return;
+        }
+    }
+    
+    // ESC (fn+backtick) to return to idle
     if (keys.fn && M5Cardputer.Keyboard.isKeyPressed('`')) {
         setMode(PorkchopMode::IDLE);
     }
@@ -197,4 +233,12 @@ uint32_t Porkchop::getUptime() const {
 
 uint16_t Porkchop::getHandshakeCount() const {
     return OinkMode::getCompleteHandshakeCount();
+}
+
+uint16_t Porkchop::getNetworkCount() const {
+    return OinkMode::getNetworkCount();
+}
+
+uint16_t Porkchop::getDeauthCount() const {
+    return OinkMode::getDeauthCount();
 }

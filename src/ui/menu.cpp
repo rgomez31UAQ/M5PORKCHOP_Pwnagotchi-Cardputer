@@ -12,6 +12,7 @@ uint8_t Menu::scrollOffset = 0;
 bool Menu::active = false;
 bool Menu::selected = false;
 MenuCallback Menu::callback = nullptr;
+bool Menu::keyWasPressed = false;
 
 void Menu::setCallback(MenuCallback cb) {
     callback = cb;
@@ -56,12 +57,21 @@ void Menu::update() {
 }
 
 void Menu::handleInput() {
-    if (!M5Cardputer.Keyboard.isChange()) return;
-    if (!M5Cardputer.Keyboard.isPressed()) return;
+    bool anyPressed = M5Cardputer.Keyboard.isPressed();
+    
+    // Debounce: only act on key press edge (not held)
+    if (!anyPressed) {
+        keyWasPressed = false;
+        return;
+    }
+    
+    // Already processed this key press
+    if (keyWasPressed) return;
+    keyWasPressed = true;
     
     auto keys = M5Cardputer.Keyboard.keysState();
     
-    // Navigation with ; (up arrow) and . (down arrow)
+    // Navigation with ; (prev/up) and . (next/down)
     if (M5Cardputer.Keyboard.isKeyPressed(';')) {
         if (selectedIndex > 0) {
             selectedIndex--;

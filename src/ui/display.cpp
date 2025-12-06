@@ -8,6 +8,7 @@
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
 #include "menu.h"
+#include "settings_menu.h"
 
 // Static member initialization
 M5Canvas Display::topBar(&M5.Display);
@@ -66,7 +67,8 @@ void Display::update() {
             break;
             
         case PorkchopMode::SETTINGS:
-            drawSettingsScreen(mainCanvas);
+            SettingsMenu::update();
+            SettingsMenu::draw(mainCanvas);
             break;
             
         case PorkchopMode::ABOUT:
@@ -96,14 +98,9 @@ void Display::pushAll() {
 void Display::drawTopBar() {
     topBar.fillSprite(COLOR_BG);
     topBar.setTextColor(COLOR_FG);
-    topBar.setTextSize(1);  // Normal font
-    topBar.setTextDatum(top_left);
+    topBar.setTextSize(1);
     
-    // Left side: hostname
-    String hostname = Config::personality().name;
-    topBar.drawString(hostname + ">", 2, 2);
-    
-    // Mode indicator
+    // Left side: mode indicator
     PorkchopMode mode = porkchop.getMode();
     String modeStr;
     uint16_t modeColor = COLOR_FG;
@@ -132,8 +129,8 @@ void Display::drawTopBar() {
     }
     
     topBar.setTextColor(modeColor);
-    topBar.setTextDatum(top_center);
-    topBar.drawString(modeStr, DISPLAY_W / 2, 2);
+    topBar.setTextDatum(top_left);
+    topBar.drawString(modeStr, 2, 2);
     
     // Right side: status icons
     topBar.setTextDatum(top_right);
@@ -145,18 +142,12 @@ void Display::drawTopBar() {
     status += mlStatus ? "M" : "-";
     
     topBar.drawString(status, DISPLAY_W - 2, 2);
-    
-    // Draw separator line
-    topBar.drawLine(0, TOP_BAR_H - 1, DISPLAY_W, TOP_BAR_H - 1, COLOR_ACCENT);
 }
 
 void Display::drawBottomBar() {
     bottomBar.fillSprite(COLOR_BG);
     bottomBar.setTextColor(COLOR_ACCENT);  // Use accent color for stats
-    bottomBar.setTextSize(1);  // Normal font
-    
-    // Draw separator line
-    bottomBar.drawLine(0, 0, DISPLAY_W, 0, COLOR_ACCENT);
+    bottomBar.setTextSize(1);
     
     // Left: stats - Networks, Handshakes, Deauths
     uint16_t netCount = porkchop.getNetworkCount();
@@ -294,33 +285,42 @@ void Display::drawModeInfo(M5Canvas& canvas, PorkchopMode mode) {
     canvas.setTextSize(1);
     
     if (mode == PorkchopMode::OINK_MODE) {
-        // Show recent network info and handshake status
         const auto& networks = OinkMode::getNetworks();
-        const auto& handshakes = OinkMode::getHandshakes();
+        int selIdx = OinkMode::getSelectionIndex();
+        DetectedNetwork* target = OinkMode::getTarget();
         
-        int y = MAIN_H - 35;
-        
-        if (!networks.empty()) {
-            // Show most recent network - SSID only, no MAC
-            const auto& net = networks.back();
-            String ssid = String(net.ssid);
-            if (ssid.length() == 0) ssid = "<hidden>";
-            
-            canvas.drawString(ssid.substring(0, 18), 2, y);
-            canvas.drawString("CH:" + String(net.channel), DISPLAY_W - 45, y);
-            y += 10;
-            canvas.setTextColor(COLOR_ACCENT);
-            canvas.drawString(String(net.rssi) + "dB  N:" + String(networks.size()), 2, y);
-        } else {
-            canvas.drawString("Scanning for networks...", 2, y);
-        }
-        
-        // Show handshake count
-        uint16_t hsCount = OinkMode::getCompleteHandshakeCount();
-        if (hsCount > 0) {
+        // Show current target being attacked (like M5Gotchi)
+        if (target) {
             canvas.setTextColor(COLOR_SUCCESS);
-            canvas.drawString("HS:" + String(hsCount), DISPLAY_W - 35, y);
+            String ssid = String(target->ssid);
+            if (ssid.length() == 0) ssid = "<hidden>";
+            canvas.drawString("ATTACKING:", 2, 2);
+            canvas.setTextColor(COLOR_ACCENT);
+            canvas.drawString(ssid.substring(0, 16), 2, 14);
+            
+            char info[32];
+            snprintf(info, sizeof(info), "CH%d %ddB", target->channel, target->rssi);
+            canvas.setTextColor(COLOR_FG);
+            canvas.drawString(info, 2, 26);
+        } else if (!networks.empty()) {
+            canvas.setTextColor(COLOR_FG);
+            canvas.drawString("Scanning...", 2, 2);
+            canvas.setTextColor(COLOR_ACCENT);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Found %d networks", (int)networks.size());
+            canvas.drawString(buf, 2, 14);
+        } else {
+            canvas.drawString("Scanning for networks...", 2, MAIN_H / 2 - 5);
         }
+        
+        // Show stats at bottom
+        canvas.setTextColor(COLOR_FG);
+        uint16_t hsCount = OinkMode::getCompleteHandshakeCount();
+        uint32_t deauthCnt = OinkMode::getDeauthCount();
+        char stats[48];
+        snprintf(stats, sizeof(stats), "N:%d HS:%d D:%lu [Bksp]=Stop", 
+                 (int)networks.size(), hsCount, deauthCnt);
+        canvas.drawString(stats, 2, MAIN_H - 12);
     } else if (mode == PorkchopMode::WARHOG_MODE) {
         // Show wardriving info
         canvas.drawString("Wardriving mode active", 2, MAIN_H - 25);
@@ -351,21 +351,18 @@ void Display::drawSettingsScreen(M5Canvas& canvas) {
 void Display::drawAboutScreen(M5Canvas& canvas) {
     canvas.setTextColor(COLOR_FG);
     canvas.setTextDatum(top_center);
-    canvas.setTextSize(1);
-    
-    canvas.drawString("=== ABOUT ===", DISPLAY_W / 2, 5);
     
     canvas.setTextSize(2);
     canvas.setTextColor(COLOR_ACCENT);
-    canvas.drawString("M5PORKCHOP", DISPLAY_W / 2, 25);
+    canvas.drawString("M5PORKCHOP", DISPLAY_W / 2, 10);
     
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_FG);
-    canvas.drawString("by 0ct0", DISPLAY_W / 2, 48);
+    canvas.drawString("by 0ct0", DISPLAY_W / 2, 35);
     
     canvas.setTextColor(COLOR_SUCCESS);
-    canvas.drawString("github.com/neledov", DISPLAY_W / 2, 65);
-    canvas.drawString("/M5Porkchop", DISPLAY_W / 2, 77);
+    canvas.drawString("github.com/neledov", DISPLAY_W / 2, 52);
+    canvas.drawString("/M5Porkchop", DISPLAY_W / 2, 64);
     
     canvas.setTextColor(COLOR_ACCENT);
     canvas.drawString("[Enter] to go back", DISPLAY_W / 2, MAIN_H - 12);

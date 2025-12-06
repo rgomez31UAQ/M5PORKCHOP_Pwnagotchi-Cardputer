@@ -13,13 +13,13 @@ enum class PorkchopMode : uint8_t;
 #define BOTTOM_BAR_H 14
 #define MAIN_H (DISPLAY_H - TOP_BAR_H - BOTTOM_BAR_H)
 
-// Colors - Pink on Black theme
+// Colors - Pink on Black theme (single pink only)
 #define COLOR_BG TFT_BLACK
-#define COLOR_FG 0xFC9F  // Hot pink
-#define COLOR_ACCENT 0xF81F  // Magenta/Pink
-#define COLOR_WARNING TFT_YELLOW
-#define COLOR_DANGER TFT_RED
-#define COLOR_SUCCESS TFT_GREEN
+#define COLOR_FG 0xFD75  // Piglet pink
+#define COLOR_ACCENT COLOR_FG  // Same pink for everything
+#define COLOR_WARNING COLOR_FG  // Pink only
+#define COLOR_DANGER COLOR_FG   // Pink only
+#define COLOR_SUCCESS COLOR_FG  // Pink only
 
 class Display {
 public:

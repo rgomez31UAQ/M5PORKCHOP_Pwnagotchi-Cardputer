@@ -14,49 +14,49 @@ uint32_t Avatar::blinkInterval = 3000;
 const char* AVATAR_NEUTRAL[] = {
     " ^  ^ ",
     "(o oo)",
-    "(____)"
+    "(    )"
 };
 
 const char* AVATAR_HAPPY[] = {
     " ^  ^ ",
     "(^ o^)",
-    "(____)"
+    "(    )"
 };
 
 const char* AVATAR_EXCITED[] = {
     " !  ! ",
     "(@o @)",
-    "(____)"
+    "(    )"
 };
 
 const char* AVATAR_HUNTING[] = {
     " >  < ",
     "(>o <)",
-    "(____)"
+    "(    )"
 };
 
 const char* AVATAR_SLEEPY[] = {
     " v  v ",
     "(-o -)",
-    "(____)z"
+    "(    )z"
 };
 
 const char* AVATAR_SAD[] = {
     " v  v ",
     "(T oT)",
-    "(____)"
+    "(    )"
 };
 
 const char* AVATAR_ANGRY[] = {
     " \\  / ",
     "(>o <)",
-    "(____)"
+    "(    )"
 };
 
 const char* AVATAR_BLINK[] = {
     " ^  ^ ",
     "(- o-)",
-    "(____)"
+    "(    )"
 };
 
 void Avatar::init() {
@@ -110,12 +110,13 @@ void Avatar::draw(M5Canvas& canvas) {
 
 void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines) {
     canvas.setTextDatum(top_left);
-    canvas.setTextSize(3);  // Bigger piglet
+    canvas.setTextSize(4);  // Bigger piglet
     canvas.setTextColor(COLOR_ACCENT);
     
+    int lineHeight = 28;  // Line height for font size 4
+    int totalHeight = lines * lineHeight;
     int startX = 2;  // Left margin
-    int startY = 5;  // Start from top of main canvas
-    int lineHeight = 22;  // Line height for font size 3
+    int startY = (MAIN_H - totalHeight) / 2;  // Center vertically
     
     for (uint8_t i = 0; i < lines; i++) {
         canvas.drawString(frame[i], startX, startY + i * lineHeight);
