@@ -24,6 +24,7 @@ public:
     // Context-aware mood updates
     static void onSniffing(uint16_t networkCount, uint8_t channel);
     static void onDeauthing(const char* apName, uint32_t deauthCount);
+    static void onDeauthSuccess(const uint8_t* clientMac);  // Client disconnected!
     static void onIdle();
     static void onWarhogUpdate();
     static void onWarhogFound(const char* apName = nullptr, uint8_t channel = 0);

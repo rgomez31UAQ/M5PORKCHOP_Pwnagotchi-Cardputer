@@ -16,6 +16,7 @@ struct GPSConfig {
     uint16_t updateInterval = 5;        // Seconds between GPS updates
     uint16_t sleepTimeMs = 5000;        // Sleep duration when stationary
     bool powerSave = true;
+    int8_t timezoneOffset = 0;          // Hours offset from UTC (-12 to +14)
 };
 
 // ML settings
@@ -57,6 +58,7 @@ public:
     static bool save();
     static bool load();
     static bool loadPersonality();
+    static bool isSDAvailable();
     
     // Getters
     static GPSConfig& gps() { return gpsConfig; }
@@ -79,4 +81,5 @@ private:
     
     static bool createDefaultConfig();
     static bool createDefaultPersonality();
+    static void savePersonalityToSPIFFS();
 };

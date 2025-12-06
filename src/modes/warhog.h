@@ -54,6 +54,7 @@ public:
     static uint32_t getOpenNetworks() { return openNetworks; }
     static uint32_t getWEPNetworks() { return wepNetworks; }
     static uint32_t getWPANetworks() { return wpaNetworks; }
+    static uint32_t getSavedCount() { return savedCount; }  // Records written with GPS fix
     
 private:
     static bool running;
@@ -69,10 +70,14 @@ private:
     static uint32_t openNetworks;
     static uint32_t wepNetworks;
     static uint32_t wpaNetworks;
+    static uint32_t savedCount;     // Records saved with GPS fix
+    static String currentFilename;  // Current session CSV file
     
     static void performScan();
     static void processScanResults();
+    static void saveNewEntries();  // Auto-save entries with GPS to CSV
     static int findEntry(const uint8_t* bssid);
     static String authModeToString(wifi_auth_mode_t mode);
     static String generateFilename(const char* ext);
+
 };

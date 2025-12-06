@@ -139,10 +139,4 @@ void Menu::draw(M5Canvas& canvas) {
     if (scrollOffset + VISIBLE_ITEMS < menuItems.size()) {
         canvas.drawString("v", DISPLAY_W - 15, yOffset + (VISIBLE_ITEMS - 1) * lineHeight);
     }
-    
-    // Instructions - ; and . are the arrow keys on M5Cardputer
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_ACCENT);
-    canvas.setTextDatum(bottom_center);
-    canvas.drawString("[;=UP .=DN] [ENTER] [`=BACK]", DISPLAY_W / 2, MAIN_H - 2);
 }

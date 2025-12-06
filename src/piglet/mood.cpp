@@ -95,6 +95,20 @@ const char* PHRASES_WARHOG_FOUND[] = {
     "Marked the spot!"
 };
 
+// Deauth success - short MAC format %02X%02X
+const char* PHRASES_DEAUTH_SUCCESS[] = {
+    "Oops! %s fell off",
+    "Bye bye %s~",
+    "%s go brrr...",
+    "Kicked %s lol",
+    "%s.exe stopped",
+    "Bonk! %s down",
+    "%s has left chat",
+    "Yeet! %s gone",
+    "%s disconnected",
+    "RIP %s oink~"
+};
+
 void Mood::init() {
     currentPhrase = "OINK!";
     happiness = 50;
@@ -415,6 +429,26 @@ void Mood::onDeauthing(const char* apName, uint32_t deauthCount) {
         currentPhrase = buf;
     }
     lastPhraseChange = millis();
+}
+
+void Mood::onDeauthSuccess(const uint8_t* clientMac) {
+    lastActivityTime = millis();
+    happiness = min(happiness + 15, 100);
+    
+    // Format short MAC (last 2 bytes only for brevity)
+    char macStr[8];
+    snprintf(macStr, sizeof(macStr), "%02X%02X", clientMac[4], clientMac[5]);
+    
+    int idx = random(0, sizeof(PHRASES_DEAUTH_SUCCESS) / sizeof(PHRASES_DEAUTH_SUCCESS[0]));
+    char buf[48];
+    snprintf(buf, sizeof(buf), PHRASES_DEAUTH_SUCCESS[idx], macStr);
+    currentPhrase = buf;
+    lastPhraseChange = millis();
+    
+    // Quick beep for confirmed kick
+    if (Config::personality().soundEnabled) {
+        M5.Speaker.tone(800, 50);
+    }
 }
 
 void Mood::onIdle() {

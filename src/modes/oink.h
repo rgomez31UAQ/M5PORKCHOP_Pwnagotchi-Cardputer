@@ -7,6 +7,15 @@
 #include <FS.h>
 #include "../ml/features.h"
 
+// Maximum clients to track per network
+#define MAX_CLIENTS_PER_NETWORK 8
+
+struct DetectedClient {
+    uint8_t mac[6];
+    int8_t rssi;
+    uint32_t lastSeen;
+};
+
 struct DetectedNetwork {
     uint8_t bssid[6];
     char ssid[33];
@@ -17,6 +26,9 @@ struct DetectedNetwork {
     uint32_t lastSeen;
     uint16_t beaconCount;
     bool isTarget;
+    bool hasPMF;  // Protected Management Frames (immune to deauth)
+    DetectedClient clients[MAX_CLIENTS_PER_NETWORK];
+    uint8_t clientCount;
 };
 
 struct EAPOLFrame {
@@ -102,6 +114,7 @@ private:
     static std::vector<DetectedNetwork> networks;
     static std::vector<CapturedHandshake> handshakes;
     static int targetIndex;
+    static uint8_t targetBssid[6];  // Store BSSID to handle index invalidation
     static int selectionIndex;  // Cursor for network selection
     static uint32_t packetCount;
     static uint32_t deauthCount;
@@ -119,8 +132,12 @@ private:
     static void processEAPOL(const uint8_t* payload, uint16_t len, const uint8_t* srcMac, const uint8_t* dstMac);
     
     static void sendDeauthFrame(const uint8_t* bssid, const uint8_t* station, uint8_t reason);
+    static void sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uint8_t count);
+    static void sendDisassocFrame(const uint8_t* bssid, const uint8_t* station, uint8_t reason);
     static void hopChannel();
-    
+    static void trackClient(const uint8_t* bssid, const uint8_t* clientMac, int8_t rssi);
+    static bool detectPMF(const uint8_t* payload, uint16_t len);
+
     static int findNetwork(const uint8_t* bssid);
     static int findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station);
     static void writePCAPHeader(fs::File& f);

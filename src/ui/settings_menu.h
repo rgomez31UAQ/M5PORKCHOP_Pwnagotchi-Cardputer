@@ -42,7 +42,7 @@ private:
     static bool keyWasPressed;
     static bool editing;  // Currently adjusting a value
     
-    static const uint8_t VISIBLE_ITEMS = 5;
+    static const uint8_t VISIBLE_ITEMS = 6;  // Fits without nav instructions
     
     static void handleInput();
     static void loadFromConfig();

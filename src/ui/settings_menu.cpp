@@ -77,6 +77,14 @@ void SettingsMenu::loadFromConfig() {
         0, 1, 1, ""
     });
     
+    // Timezone offset (UTC-12 to UTC+14)
+    items.push_back({
+        "Timezone",
+        SettingType::VALUE,
+        (int)Config::gps().timezoneOffset,
+        -12, 14, 1, "h"
+    });
+    
     // Save & Exit action
     items.push_back({
         "< Save & Exit >",
@@ -105,6 +113,7 @@ void SettingsMenu::saveToConfig() {
     auto& g = Config::gps();
     g.enabled = items[5].value == 1;
     g.powerSave = items[6].value == 1;
+    g.timezoneOffset = items[7].value;
     Config::setGPS(g);
     
     // Save to file
@@ -263,14 +272,5 @@ void SettingsMenu::draw(M5Canvas& canvas) {
     }
     if (scrollOffset + VISIBLE_ITEMS < items.size()) {
         canvas.drawString("v", DISPLAY_W / 2, MAIN_H - 10);
-    }
-    
-    // Help text at bottom - context sensitive
-    canvas.setTextDatum(bottom_center);
-    auto& currentItem = items[selectedIndex];
-    if (editing && currentItem.type == SettingType::VALUE) {
-        canvas.drawString(";/. adjust [Enter] OK", DISPLAY_W / 2, MAIN_H - 1);
-    } else {
-        canvas.drawString(";/. nav [Enter] edit", DISPLAY_W / 2, MAIN_H - 1);
     }
 }

@@ -7,6 +7,8 @@
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
+#include "../modes/warhog.h"
+#include "../gps/gps.h"
 #include "menu.h"
 #include "settings_menu.h"
 
@@ -132,30 +134,52 @@ void Display::drawTopBar() {
     topBar.setTextDatum(top_left);
     topBar.drawString(modeStr, 2, 2);
     
-    // Right side: status icons
-    topBar.setTextDatum(top_right);
+    // Center: clock (from GPS or --:--)
+    topBar.setTextDatum(top_center);
     topBar.setTextColor(COLOR_FG);
+    String timeStr = GPS::hasFix() ? GPS::getTimeString() : "--:--";
+    topBar.drawString(timeStr, DISPLAY_W / 2, 2);
     
+    // Right side: battery + status icons
+    topBar.setTextDatum(top_right);
+    
+    // Battery percentage
+    int battLevel = M5.Power.getBatteryLevel();
+    String battStr = String(battLevel) + "%";
+    
+    // Status icons
     String status = "";
     status += gpsStatus ? "G" : "-";
     status += wifiStatus ? "W" : "-";
     status += mlStatus ? "M" : "-";
     
-    topBar.drawString(status, DISPLAY_W - 2, 2);
+    // Draw battery then status
+    String rightStr = battStr + " " + status;
+    topBar.drawString(rightStr, DISPLAY_W - 2, 2);
 }
 
 void Display::drawBottomBar() {
     bottomBar.fillSprite(COLOR_BG);
     bottomBar.setTextColor(COLOR_ACCENT);  // Use accent color for stats
     bottomBar.setTextSize(1);
-    
-    // Left: stats - Networks, Handshakes, Deauths
-    uint16_t netCount = porkchop.getNetworkCount();
-    uint16_t hsCount = porkchop.getHandshakeCount();
-    uint16_t deauthCount = porkchop.getDeauthCount();
-    
     bottomBar.setTextDatum(top_left);
-    String stats = "N:" + String(netCount) + " HS:" + String(hsCount) + " D:" + String(deauthCount);
+    
+    PorkchopMode mode = porkchop.getMode();
+    String stats;
+    
+    if (mode == PorkchopMode::WARHOG_MODE) {
+        // WARHOG: show unique networks and saved records
+        uint32_t unique = WarhogMode::getTotalNetworks();
+        uint32_t saved = WarhogMode::getSavedCount();
+        stats = "U:" + String(unique) + " S:" + String(saved);
+    } else {
+        // Default: Networks, Handshakes, Deauths
+        uint16_t netCount = porkchop.getNetworkCount();
+        uint16_t hsCount = porkchop.getHandshakeCount();
+        uint16_t deauthCount = porkchop.getDeauthCount();
+        stats = "N:" + String(netCount) + " HS:" + String(hsCount) + " D:" + String(deauthCount);
+    }
+    
     bottomBar.drawString(stats, 2, 3);
     
     // Right: uptime

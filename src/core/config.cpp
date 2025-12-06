@@ -4,6 +4,7 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
+#include <SPIFFS.h>
 
 // Static member initialization
 GPSConfig Config::gpsConfig;
@@ -11,52 +12,52 @@ MLConfig Config::mlConfig;
 WiFiConfig Config::wifiConfig;
 PersonalityConfig Config::personalityConfig;
 bool Config::initialized = false;
+static bool sdAvailable = false;
 
 bool Config::init() {
+    // Initialize SPIFFS first (always available)
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[CONFIG] SPIFFS mount failed");
+    }
+    
     // M5Cardputer handles SD initialization via M5.begin()
     // SD is on the built-in SD card slot (GPIO 12 for CS)
     
     if (!SD.begin(GPIO_NUM_12, SPI, 25000000)) {
-        Serial.println("[CONFIG] SD card init failed, using defaults");
-        createDefaultConfig();
-        createDefaultPersonality();
-        initialized = true;
-        return true;
+        Serial.println("[CONFIG] SD card init failed, using SPIFFS");
+        sdAvailable = false;
+    } else {
+        Serial.println("[CONFIG] SD card mounted");
+        sdAvailable = true;
+        
+        // Create directories on SD if needed
+        if (!SD.exists("/handshakes")) SD.mkdir("/handshakes");
+        if (!SD.exists("/mldata")) SD.mkdir("/mldata");
+        if (!SD.exists("/models")) SD.mkdir("/models");
+        if (!SD.exists("/logs")) SD.mkdir("/logs");
+        if (!SD.exists("/wardriving")) SD.mkdir("/wardriving");
     }
     
-    Serial.println("[CONFIG] SD card mounted");
-    
-    // Create directories if needed
-    if (!SD.exists("/handshakes")) SD.mkdir("/handshakes");
-    if (!SD.exists("/mldata")) SD.mkdir("/mldata");
-    if (!SD.exists("/models")) SD.mkdir("/models");
-    if (!SD.exists("/logs")) SD.mkdir("/logs");
-    if (!SD.exists("/wardriving")) SD.mkdir("/wardriving");
-    
-    // Load or create config
-    if (!SD.exists(CONFIG_FILE)) {
-        Serial.println("[CONFIG] Creating default config");
-        createDefaultConfig();
-        save();
-    }
-    
-    if (!SD.exists(PERSONALITY_FILE)) {
+    // Load personality from SPIFFS (always use SPIFFS for settings)
+    if (!loadPersonality()) {
         Serial.println("[CONFIG] Creating default personality");
         createDefaultPersonality();
+        // Save defaults to SPIFFS
+        savePersonalityToSPIFFS();
     }
     
+    // Load main config
     if (!load()) {
-        Serial.println("[CONFIG] Failed to load config, using defaults");
+        Serial.println("[CONFIG] Creating default config");
         createDefaultConfig();
-    }
-    
-    if (!loadPersonality()) {
-        Serial.println("[CONFIG] Failed to load personality, using defaults");
-        createDefaultPersonality();
     }
     
     initialized = true;
     return true;
+}
+
+bool Config::isSDAvailable() {
+    return sdAvailable;
 }
 
 bool Config::load() {
@@ -84,6 +85,7 @@ bool Config::load() {
         gpsConfig.updateInterval = doc["gps"]["updateInterval"] | 5;
         gpsConfig.sleepTimeMs = doc["gps"]["sleepTimeMs"] | 5000;
         gpsConfig.powerSave = doc["gps"]["powerSave"] | true;
+        gpsConfig.timezoneOffset = doc["gps"]["timezoneOffset"] | 0;
     }
     
     // ML config
@@ -113,8 +115,10 @@ bool Config::load() {
 }
 
 bool Config::loadPersonality() {
-    File file = SD.open(PERSONALITY_FILE, FILE_READ);
+    // Load from SPIFFS (always available)
+    File file = SPIFFS.open(PERSONALITY_FILE, FILE_READ);
     if (!file) {
+        Serial.println("[CONFIG] Personality file not found in SPIFFS");
         return false;
     }
     
@@ -123,6 +127,7 @@ bool Config::loadPersonality() {
     file.close();
     
     if (err) {
+        Serial.printf("[CONFIG] Personality JSON error: %s\n", err.c_str());
         return false;
     }
     
@@ -137,10 +142,32 @@ bool Config::loadPersonality() {
     personalityConfig.patience = doc["patience"] | 0.5f;
     personalityConfig.soundEnabled = doc["soundEnabled"] | true;
     
-    Serial.printf("[CONFIG] Personality: %s (mood: %d)\n", 
+    Serial.printf("[CONFIG] Personality: %s (mood: %d, sound: %s)\n", 
                   personalityConfig.name, 
-                  personalityConfig.mood);
+                  personalityConfig.mood,
+                  personalityConfig.soundEnabled ? "ON" : "OFF");
     return true;
+}
+
+void Config::savePersonalityToSPIFFS() {
+    JsonDocument doc;
+    doc["name"] = personalityConfig.name;
+    doc["mood"] = personalityConfig.mood;
+    doc["experience"] = personalityConfig.experience;
+    doc["curiosity"] = personalityConfig.curiosity;
+    doc["aggression"] = personalityConfig.aggression;
+    doc["patience"] = personalityConfig.patience;
+    doc["soundEnabled"] = personalityConfig.soundEnabled;
+    
+    File file = SPIFFS.open(PERSONALITY_FILE, FILE_WRITE);
+    if (file) {
+        serializeJsonPretty(doc, file);
+        file.close();
+        Serial.printf("[CONFIG] Saved personality to SPIFFS (sound: %s)\n",
+                     personalityConfig.soundEnabled ? "ON" : "OFF");
+    } else {
+        Serial.println("[CONFIG] Failed to save personality to SPIFFS");
+    }
 }
 
 bool Config::save() {
@@ -154,6 +181,7 @@ bool Config::save() {
     doc["gps"]["updateInterval"] = gpsConfig.updateInterval;
     doc["gps"]["sleepTimeMs"] = gpsConfig.sleepTimeMs;
     doc["gps"]["powerSave"] = gpsConfig.powerSave;
+    doc["gps"]["timezoneOffset"] = gpsConfig.timezoneOffset;
     
     // ML config
     doc["ml"]["enabled"] = mlConfig.enabled;
@@ -219,19 +247,6 @@ void Config::setWiFi(const WiFiConfig& cfg) {
 void Config::setPersonality(const PersonalityConfig& cfg) {
     personalityConfig = cfg;
     
-    // Save personality to separate file
-    JsonDocument doc;
-    doc["name"] = cfg.name;
-    doc["mood"] = cfg.mood;
-    doc["experience"] = cfg.experience;
-    doc["curiosity"] = cfg.curiosity;
-    doc["aggression"] = cfg.aggression;
-    doc["patience"] = cfg.patience;
-    doc["soundEnabled"] = cfg.soundEnabled;
-    
-    File file = SD.open(PERSONALITY_FILE, FILE_WRITE);
-    if (file) {
-        serializeJsonPretty(doc, file);
-        file.close();
-    }
+    // Save personality to SPIFFS (always available)
+    savePersonalityToSPIFFS();
 }

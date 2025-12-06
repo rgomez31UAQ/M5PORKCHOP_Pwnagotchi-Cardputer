@@ -155,11 +155,18 @@ String GPS::getLocationString() {
 
 String GPS::getTimeString() {
     if (!gps.time.isValid()) {
-        return "--:--:--";
+        return "--:--";
     }
     
-    char buf[12];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d",
-             gps.time.hour(), gps.time.minute(), gps.time.second());
+    // Apply timezone offset from config
+    int8_t tzOffset = Config::gps().timezoneOffset;
+    int hour = gps.time.hour() + tzOffset;
+    
+    // Handle day wrap
+    if (hour >= 24) hour -= 24;
+    if (hour < 0) hour += 24;
+    
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%02d:%02d", hour, gps.time.minute());
     return String(buf);
 }

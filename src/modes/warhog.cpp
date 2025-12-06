@@ -21,6 +21,8 @@ uint32_t WarhogMode::totalNetworks = 0;
 uint32_t WarhogMode::openNetworks = 0;
 uint32_t WarhogMode::wepNetworks = 0;
 uint32_t WarhogMode::wpaNetworks = 0;
+uint32_t WarhogMode::savedCount = 0;
+String WarhogMode::currentFilename = "";
 
 void WarhogMode::init() {
     entries.clear();
@@ -29,6 +31,8 @@ void WarhogMode::init() {
     openNetworks = 0;
     wepNetworks = 0;
     wpaNetworks = 0;
+    savedCount = 0;
+    currentFilename = "";
     
     scanInterval = Config::gps().updateInterval * 1000;
     
@@ -212,10 +216,72 @@ void WarhogMode::processScanResults() {
     if (newCount > 0) {
         // Use WARHOG-specific phrases for found networks
         Mood::onWarhogFound(nullptr, WiFi.channel());
+        
+        // Auto-save new entries with GPS fix to CSV
+        if (hasGPS && Config::isSDAvailable()) {
+            saveNewEntries();
+        }
     }
     
     WiFi.scanDelete();
     scanComplete = true;
+}
+
+void WarhogMode::saveNewEntries() {
+    // Create file with unique name on first save
+    if (currentFilename.length() == 0) {
+        currentFilename = generateFilename("csv");
+        
+        // Write CSV header
+        File f = SD.open(currentFilename.c_str(), FILE_WRITE);
+        if (f) {
+            f.println("BSSID,SSID,RSSI,Channel,AuthMode,Latitude,Longitude,Altitude,Timestamp");
+            f.close();
+            Serial.printf("[WARHOG] Created file: %s\n", currentFilename.c_str());
+        } else {
+            Serial.printf("[WARHOG] Failed to create: %s\n", currentFilename.c_str());
+            return;
+        }
+    }
+    
+    // Append unsaved entries that have GPS coordinates
+    File f = SD.open(currentFilename.c_str(), FILE_APPEND);
+    if (!f) {
+        Serial.printf("[WARHOG] Failed to append to %s\n", currentFilename.c_str());
+        return;
+    }
+    
+    uint32_t newSaved = 0;
+    for (auto& e : entries) {
+        // Only save if not already saved AND has GPS coordinates
+        if (!e.saved && e.latitude != 0 && e.longitude != 0) {
+            f.printf("%02X:%02X:%02X:%02X:%02X:%02X,",
+                    e.bssid[0], e.bssid[1], e.bssid[2],
+                    e.bssid[3], e.bssid[4], e.bssid[5]);
+            
+            // Escape SSID for CSV
+            f.print("\"");
+            for (int i = 0; i < 32 && e.ssid[i]; i++) {
+                if (e.ssid[i] == '"') f.print("\"\"");
+                else f.print(e.ssid[i]);
+            }
+            f.print("\",");
+            
+            f.printf("%d,%d,%s,%.6f,%.6f,%.1f,%lu\n",
+                    e.rssi, e.channel, authModeToString(e.authmode).c_str(),
+                    e.latitude, e.longitude, e.altitude, e.timestamp);
+            
+            e.saved = true;
+            newSaved++;
+            savedCount++;
+        }
+    }
+    
+    f.close();
+    
+    if (newSaved > 0) {
+        Serial.printf("[WARHOG] Saved %lu entries (total: %lu)\n", newSaved, savedCount);
+    }
 }
 
 bool WarhogMode::hasGPSFix() {
@@ -352,12 +418,21 @@ String WarhogMode::authModeToString(wifi_auth_mode_t mode) {
 }
 
 String WarhogMode::generateFilename(const char* ext) {
-    // Generate filename with date/time if GPS has time
-    char buf[32];
+    // Generate filename with date/time from GPS: YYYYMMDD_HHMMSS
+    char buf[48];
     GPSData gps = GPS::getData();
     
-    if (gps.date > 0) {
-        snprintf(buf, sizeof(buf), "/warhog_%06lu.%s", gps.date, ext);
+    if (gps.date > 0 && gps.time > 0) {
+        // date format: DDMMYY, time format: HHMMSSCC (centiseconds)
+        uint8_t day = gps.date / 10000;
+        uint8_t month = (gps.date / 100) % 100;
+        uint8_t year = gps.date % 100;
+        uint8_t hour = gps.time / 1000000;
+        uint8_t minute = (gps.time / 10000) % 100;
+        uint8_t second = (gps.time / 100) % 100;
+        
+        snprintf(buf, sizeof(buf), "/warhog_20%02d%02d%02d_%02d%02d%02d.%s",
+                year, month, day, hour, minute, second, ext);
     } else {
         snprintf(buf, sizeof(buf), "/warhog_%lu.%s", millis(), ext);
     }
