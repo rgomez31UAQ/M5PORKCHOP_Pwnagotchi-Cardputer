@@ -31,6 +31,9 @@ bool WarhogMode::enhancedMode = false;
 std::map<uint64_t, WiFiFeatures> WarhogMode::beaconFeatures;
 uint32_t WarhogMode::beaconCount = 0;
 
+// Simple flag to avoid concurrent access between promiscuous callback and main thread
+static volatile bool beaconMapBusy = false;
+
 void WarhogMode::init() {
     entries.clear();
     newCount = 0;
@@ -202,6 +205,9 @@ void WarhogMode::processScanResults() {
         return;
     }
     
+    // Guard beacon map access from promiscuous callback
+    beaconMapBusy = true;
+    
     size_t previousCount = entries.size();
     
     for (uint16_t i = 0; i < apCount; i++) {
@@ -304,6 +310,9 @@ void WarhogMode::processScanResults() {
             }
         }
     }
+    
+    // Release beacon map guard
+    beaconMapBusy = false;
     
     delete[] apRecords;
     
@@ -622,6 +631,9 @@ bool WarhogMode::exportMLTraining(const char* path) {
 void WarhogMode::promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
     // Only process management frames (beacons, probe responses)
     if (type != WIFI_PKT_MGMT) return;
+    
+    // Skip if main thread is accessing the map
+    if (beaconMapBusy) return;
     
     wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
     const uint8_t* frame = pkt->payload;

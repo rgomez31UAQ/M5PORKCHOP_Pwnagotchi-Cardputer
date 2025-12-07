@@ -145,12 +145,18 @@ WiFiFeatures FeatureExtractor::extractFromBeacon(const uint8_t* frame, uint16_t 
     f.beaconInterval = parseBeaconInterval(frame, len);
     f.capability = parseCapability(frame, len);
     
-    // Parse capability bits
-    f.isHidden = !(f.capability & 0x0001);  // ESS bit
+    // isHidden is determined from SSID IE in parseIEs, initialize to false
+    f.isHidden = false;
     f.hasWPS = false;  // Determined from IEs
+    f.hasWPA = false;
+    f.hasWPA2 = false;
+    f.hasWPA3 = false;
     
-    // Parse Information Elements
+    // Parse Information Elements (SSID, WPA, WPS, etc.)
     parseIEs(frame, len, f);
+    
+    // Extract channel from DS Parameter Set IE if available (done in parseIEs)
+    // If not found, channel remains 0
     
     return f;
 }
@@ -266,11 +272,19 @@ void FeatureExtractor::parseIEs(const uint8_t* frame, uint16_t len, WiFiFeatures
         
         if (offset + 2 + ieLen > len) break;
         
+        const uint8_t* ieData = frame + offset + 2;
+        
         switch (id) {
             case 0:  // SSID
-                // Check for hidden SSID
-                if (ieLen == 0 || frame[offset + 2] == 0) {
+                // Check for hidden SSID (zero-length or all nulls)
+                if (ieLen == 0) {
                     features.isHidden = true;
+                } else {
+                    bool allNull = true;
+                    for (uint8_t i = 0; i < ieLen && i < 32; i++) {
+                        if (ieData[i] != 0) { allNull = false; break; }
+                    }
+                    features.isHidden = allNull;
                 }
                 break;
                 
@@ -278,21 +292,41 @@ void FeatureExtractor::parseIEs(const uint8_t* frame, uint16_t len, WiFiFeatures
                 features.supportedRates = ieLen;
                 break;
                 
-            case 45:  // HT Capabilities
-                features.htCapabilities = 1;
+            case 3:  // DS Parameter Set (channel)
+                if (ieLen >= 1) {
+                    features.channel = ieData[0];
+                }
                 break;
                 
-            case 191:  // VHT Capabilities
+            case 45:  // HT Capabilities (802.11n)
+                features.htCapabilities |= 0x04;  // Set 11n flag
+                break;
+                
+            case 48:  // RSN (WPA2/WPA3)
+                features.hasWPA2 = true;
+                // Check for WPA3 SAE in RSN
+                if (ieLen >= 8) {
+                    // Parse AKM suite to detect SAE (WPA3)
+                    // Simplified: just mark WPA2 for now
+                }
+                break;
+                
+            case 191:  // VHT Capabilities (802.11ac)
                 features.vhtCapabilities = 1;
                 break;
                 
             case 221:  // Vendor Specific
                 features.vendorIECount++;
-                // Check for WPS
+                // Check for WPS OUI: 00:50:F2:04
                 if (ieLen >= 4) {
-                    if (frame[offset+2] == 0x00 && frame[offset+3] == 0x50 &&
-                        frame[offset+4] == 0xF2 && frame[offset+5] == 0x04) {
+                    if (ieData[0] == 0x00 && ieData[1] == 0x50 &&
+                        ieData[2] == 0xF2 && ieData[3] == 0x04) {
                         features.hasWPS = true;
+                    }
+                    // Check for WPA OUI: 00:50:F2:01
+                    if (ieData[0] == 0x00 && ieData[1] == 0x50 &&
+                        ieData[2] == 0xF2 && ieData[3] == 0x01) {
+                        features.hasWPA = true;
                     }
                 }
                 break;
