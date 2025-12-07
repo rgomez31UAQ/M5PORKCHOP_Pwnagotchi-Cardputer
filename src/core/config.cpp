@@ -91,6 +91,7 @@ bool Config::load() {
     // ML config
     if (doc["ml"].is<JsonObject>()) {
         mlConfig.enabled = doc["ml"]["enabled"] | true;
+        mlConfig.collectionMode = static_cast<MLCollectionMode>(doc["ml"]["collectionMode"] | 0);
         mlConfig.modelPath = doc["ml"]["modelPath"] | "/models/porkchop_model.bin";
         mlConfig.confidenceThreshold = doc["ml"]["confidenceThreshold"] | 0.7f;
         mlConfig.rogueApThreshold = doc["ml"]["rogueApThreshold"] | 0.8f;
@@ -188,6 +189,7 @@ bool Config::save() {
     
     // ML config
     doc["ml"]["enabled"] = mlConfig.enabled;
+    doc["ml"]["collectionMode"] = static_cast<uint8_t>(mlConfig.collectionMode);
     doc["ml"]["modelPath"] = mlConfig.modelPath;
     doc["ml"]["confidenceThreshold"] = mlConfig.confidenceThreshold;
     doc["ml"]["rogueApThreshold"] = mlConfig.rogueApThreshold;

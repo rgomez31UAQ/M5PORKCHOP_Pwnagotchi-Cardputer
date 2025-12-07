@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <vector>
+#include <map>
 #include <esp_wifi.h>
 #include "../gps/gps.h"
 #include "../ml/features.h"
@@ -21,6 +22,13 @@ struct WardrivingEntry {
     WiFiFeatures features;  // ML features for training data
     uint8_t label;          // 0=unknown, 1=normal, 2=rogue, 3=evil_twin
 };
+
+// BSSID key for map lookup (6 bytes as uint64_t)
+inline uint64_t bssidToKey(const uint8_t* bssid) {
+    return ((uint64_t)bssid[0] << 40) | ((uint64_t)bssid[1] << 32) |
+           ((uint64_t)bssid[2] << 24) | ((uint64_t)bssid[3] << 16) |
+           ((uint64_t)bssid[4] << 8) | bssid[5];
+}
 
 class WarhogMode {
 public:
@@ -72,11 +80,21 @@ private:
     static uint32_t savedCount;     // Records saved with GPS fix
     static String currentFilename;  // Current session CSV file
     
+    // Enhanced ML mode - beacon capture
+    static bool enhancedMode;
+    static std::map<uint64_t, WiFiFeatures> beaconFeatures;  // BSSID -> features from beacons
+    static uint32_t beaconCount;
+    
     static void performScan();
     static void processScanResults();
     static void saveNewEntries();  // Auto-save entries with GPS to CSV
     static int findEntry(const uint8_t* bssid);
     static String authModeToString(wifi_auth_mode_t mode);
     static String generateFilename(const char* ext);
+    
+    // Enhanced mode promiscuous callback
+    static void promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type);
+    static void startEnhancedCapture();
+    static void stopEnhancedCapture();
 
 };

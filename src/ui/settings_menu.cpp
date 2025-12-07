@@ -120,6 +120,14 @@ void SettingsMenu::loadFromConfig() {
         -12, 14, 1, "h", ""
     });
     
+    // ML Collection Mode (0=Basic, 1=Enhanced)
+    items.push_back({
+        "ML Mode",
+        SettingType::VALUE,
+        static_cast<int>(Config::ml().collectionMode),
+        0, 1, 1, "", ""  // Will display as Basic/Enhanced in render
+    });
+    
     // Save & Exit action
     items.push_back({
         "< Save & Exit >",
@@ -158,6 +166,11 @@ void SettingsMenu::saveToConfig() {
     
     g.timezoneOffset = items[10].value;
     Config::setGPS(g);
+    
+    // ML settings
+    auto& m = Config::ml();
+    m.collectionMode = static_cast<MLCollectionMode>(items[11].value);
+    Config::setML(m);
     
     // Save to file
     Config::save();
@@ -381,6 +394,14 @@ void SettingsMenu::draw(M5Canvas& canvas) {
                     valStr = "[" + String(baudLabels[item.value]) + "]";
                 } else {
                     valStr = String(baudLabels[item.value]);
+                }
+            // Special handling for ML Mode (display Basic/Enhanced instead of 0/1)
+            } else if (item.label == "ML Mode") {
+                static const char* modeLabels[] = {"Basic", "Enhanced"};
+                if (isSelected && editing) {
+                    valStr = "[" + String(modeLabels[item.value]) + "]";
+                } else {
+                    valStr = String(modeLabels[item.value]);
                 }
             } else if (isSelected && editing) {
                 valStr = "[" + String(item.value) + item.suffix + "]";

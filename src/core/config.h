@@ -19,9 +19,16 @@ struct GPSConfig {
     int8_t timezoneOffset = 0;          // Hours offset from UTC (-12 to +14)
 };
 
+// ML data collection mode
+enum class MLCollectionMode : uint8_t {
+    BASIC = 0,      // Use ESP-IDF scan API only (faster, less features)
+    ENHANCED = 1    // Use promiscuous beacon capture (slower, full features)
+};
+
 // ML settings
 struct MLConfig {
     bool enabled = true;
+    MLCollectionMode collectionMode = MLCollectionMode::BASIC;  // Data collection mode
     String modelPath = "/models/porkchop_model.bin";
     float confidenceThreshold = 0.7f;
     float rogueApThreshold = 0.8f;

@@ -26,6 +26,11 @@ uint32_t WarhogMode::wpaNetworks = 0;
 uint32_t WarhogMode::savedCount = 0;
 String WarhogMode::currentFilename = "";
 
+// Enhanced mode statics
+bool WarhogMode::enhancedMode = false;
+std::map<uint64_t, WiFiFeatures> WarhogMode::beaconFeatures;
+uint32_t WarhogMode::beaconCount = 0;
+
 void WarhogMode::init() {
     entries.clear();
     newCount = 0;
@@ -36,9 +41,15 @@ void WarhogMode::init() {
     savedCount = 0;
     currentFilename = "";
     
+    // Check if Enhanced ML mode is enabled
+    enhancedMode = (Config::ml().collectionMode == MLCollectionMode::ENHANCED);
+    beaconFeatures.clear();
+    beaconCount = 0;
+    
     scanInterval = Config::gps().updateInterval * 1000;
     
-    Serial.println("[WARHOG] Initialized");
+    Serial.printf("[WARHOG] Initialized (ML Mode: %s)\n", 
+                  enhancedMode ? "Enhanced" : "Basic");
 }
 
 void WarhogMode::start() {
@@ -54,10 +65,20 @@ void WarhogMode::start() {
     wpaNetworks = 0;
     savedCount = 0;
     currentFilename = "";
+    beaconFeatures.clear();
+    beaconCount = 0;
+    
+    // Check if Enhanced ML mode is enabled (might have changed in settings)
+    enhancedMode = (Config::ml().collectionMode == MLCollectionMode::ENHANCED);
     
     // Initialize WiFi in STA mode for scanning
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    
+    // If Enhanced mode, start promiscuous capture for beacons
+    if (enhancedMode) {
+        startEnhancedCapture();
+    }
     
     // Wake up GPS
     GPS::wake();
@@ -68,13 +89,19 @@ void WarhogMode::start() {
     
     Display::setWiFiStatus(true);
     Mood::onWarhogUpdate();  // Show WARHOG phrase on start
-    Serial.println("[WARHOG] Running");
+    Serial.printf("[WARHOG] Running (ML Mode: %s)\n", 
+                  enhancedMode ? "Enhanced" : "Basic");
 }
 
 void WarhogMode::stop() {
     if (!running) return;
     
     Serial.println("[WARHOG] Stopping...");
+    
+    // Stop Enhanced mode capture
+    if (enhancedMode) {
+        stopEnhancedCapture();
+    }
     
     running = false;
     
@@ -209,8 +236,24 @@ void WarhogMode::processScanResults() {
             entry.saved = false;
             entry.label = 0;  // Unknown - user can label later
             
-            // Extract ML features from ACTUAL scan result (not reconstructed)
-            entry.features = FeatureExtractor::extractFromScan(&ap);
+            // Extract ML features - Enhanced mode uses beacon-captured features
+            if (enhancedMode) {
+                uint64_t key = bssidToKey(ap.bssid);
+                auto it = beaconFeatures.find(key);
+                if (it != beaconFeatures.end()) {
+                    // Use beacon-extracted features (full IE parsing, WPS, vendor IEs, etc.)
+                    entry.features = it->second;
+                    // Update RSSI from scan (may be fresher)
+                    entry.features.rssi = ap.rssi;
+                    entry.features.snr = (float)(ap.rssi - entry.features.noise);
+                } else {
+                    // No beacon captured yet, fall back to scan API
+                    entry.features = FeatureExtractor::extractFromScan(&ap);
+                }
+            } else {
+                // Basic mode: use scan API features only
+                entry.features = FeatureExtractor::extractFromScan(&ap);
+            }
             
             if (hasGPS) {
                 entry.latitude = gps.latitude;
@@ -245,8 +288,19 @@ void WarhogMode::processScanResults() {
                 entries[idx].longitude = gps.longitude;
                 entries[idx].altitude = gps.altitude;
                 entries[idx].rssi = ap.rssi;
-                // Also update features with new RSSI
-                entries[idx].features = FeatureExtractor::extractFromScan(&ap);
+                
+                // Update features - Enhanced mode may have better data now
+                if (enhancedMode) {
+                    uint64_t key = bssidToKey(ap.bssid);
+                    auto it = beaconFeatures.find(key);
+                    if (it != beaconFeatures.end()) {
+                        entries[idx].features = it->second;
+                        entries[idx].features.rssi = ap.rssi;
+                        entries[idx].features.snr = (float)(ap.rssi - entries[idx].features.noise);
+                    }
+                } else {
+                    entries[idx].features = FeatureExtractor::extractFromScan(&ap);
+                }
             }
         }
     }
@@ -561,4 +615,78 @@ bool WarhogMode::exportMLTraining(const char* path) {
     f.close();
     Serial.printf("[WARHOG] ML training export: %d entries to %s\n", entries.size(), path);
     return true;
+}
+
+// Enhanced ML Mode - Promiscuous beacon capture
+
+void WarhogMode::promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
+    // Only process management frames (beacons, probe responses)
+    if (type != WIFI_PKT_MGMT) return;
+    
+    wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
+    const uint8_t* frame = pkt->payload;
+    uint16_t len = pkt->rx_ctrl.sig_len;
+    int8_t rssi = pkt->rx_ctrl.rssi;
+    
+    if (len < 24) return;
+    
+    // Frame control field - check if it's a beacon (type=0, subtype=8)
+    uint16_t frameControl = frame[0] | (frame[1] << 8);
+    uint8_t frameType = (frameControl >> 2) & 0x03;      // Type (bits 2-3)
+    uint8_t frameSubtype = (frameControl >> 4) & 0x0F;   // Subtype (bits 4-7)
+    
+    // Only process beacons (subtype 8) and probe responses (subtype 5)
+    if (frameType != 0) return;  // Not management
+    if (frameSubtype != 8 && frameSubtype != 5) return;
+    
+    // BSSID is at offset 16 for beacons/probe responses
+    const uint8_t* bssid = frame + 16;
+    uint64_t key = bssidToKey(bssid);
+    
+    // Extract full features from beacon frame
+    WiFiFeatures features = FeatureExtractor::extractFromBeacon(frame, len, rssi);
+    
+    // Store or update features for this BSSID
+    // Note: map operations are quick, but we limit to prevent memory issues
+    if (beaconFeatures.size() < 500) {  // Max 500 BSSIDs in beacon cache
+        auto it = beaconFeatures.find(key);
+        if (it != beaconFeatures.end()) {
+            // Update beacon count and jitter calculation
+            it->second.beaconCount++;
+            // Simple jitter: difference from expected interval
+            // Real interval would need timestamps, simplified here
+        } else {
+            features.beaconCount = 1;
+            beaconFeatures[key] = features;
+        }
+        beaconCount++;
+    }
+}
+
+void WarhogMode::startEnhancedCapture() {
+    Serial.println("[WARHOG] Starting Enhanced ML capture (promiscuous mode)");
+    
+    beaconFeatures.clear();
+    beaconCount = 0;
+    
+    // Configure promiscuous mode filter for management frames only
+    wifi_promiscuous_filter_t filter = {
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT
+    };
+    
+    esp_wifi_set_promiscuous_filter(&filter);
+    esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
+    esp_wifi_set_promiscuous(true);
+    
+    Serial.println("[WARHOG] Promiscuous mode enabled for beacon capture");
+}
+
+void WarhogMode::stopEnhancedCapture() {
+    Serial.println("[WARHOG] Stopping Enhanced ML capture");
+    
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    
+    Serial.printf("[WARHOG] Captured %d beacons from %d BSSIDs\n", 
+                  beaconCount, beaconFeatures.size());
 }
