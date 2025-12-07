@@ -211,6 +211,35 @@
     your piglet is going ham on someone's network.
 
 
+--[ 6.1 - Screen Layout
+
+    The 240x135 display is split into three regions:
+
+    +----------------------------------------+
+    | [OINK]                     SD GPS WiFi | <- Top Bar (14px)
+    +----------------------------------------+
+    |                                        |
+    |      ?  ?     ,----------------------. |
+    |     (o 00) < | *sniff sniff*         | | <- Main Canvas
+    |     (    )   | Found something tasty!| |    (107px)
+    |              `----------------------'  |
+    |                                        |
+    +----------------------------------------+
+    | N:42  HS:3  D:127         CH:6  -45dBm | <- Bottom Bar (14px)
+    +----------------------------------------+
+
+    The piglet has moods. Here's the emotional range:
+
+        NEUTRAL     HAPPY       HUNTING     SLEEPY      SAD
+         ?  ?        ^  ^        /  \        v  v        .  .
+        (o 00)      (^ 00)      (> 00)      (- 00)      (T 00)
+        (    )      (    )      (    )      (    )      (    )
+
+    Top Bar:    Mode indicator [OINK/WARHOG], status icons
+    Main:       Derpy piglet + speech bubble with phrases
+    Bottom:     Stats (Networks/Handshakes/Deauths, Channel, RSSI)
+
+
 --[ 7 - Configuration
 
     Settings persist to SPIFFS. Your piglet remembers.
