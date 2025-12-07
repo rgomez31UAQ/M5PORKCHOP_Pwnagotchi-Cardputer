@@ -102,8 +102,17 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::MENU:
             Menu::hide();
             break;
+        case PorkchopMode::SETTINGS:
+            SettingsMenu::hide();
+            break;
+        case PorkchopMode::CAPTURES:
+            CapturesMenu::hide();
+            break;
         case PorkchopMode::FILE_TRANSFER:
             FileServer::stop();
+            break;
+        case PorkchopMode::LOG_VIEWER:
+            LogViewer::hide();
             break;
         default:
             break;

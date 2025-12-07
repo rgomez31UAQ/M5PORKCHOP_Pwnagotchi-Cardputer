@@ -215,6 +215,9 @@ void Display::drawBottomBar() {
     } else if (mode == PorkchopMode::MENU) {
         // MENU: show description of selected item
         stats = Menu::getSelectedDescription();
+    } else if (mode == PorkchopMode::LOG_VIEWER) {
+        // LOG_VIEWER: show scroll hint
+        stats = "[;/.] scroll  [Bksp] exit";
     } else {
         // Default: Networks, Handshakes, Deauths
         uint16_t netCount = porkchop.getNetworkCount();

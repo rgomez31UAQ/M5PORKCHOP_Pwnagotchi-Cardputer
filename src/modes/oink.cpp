@@ -224,6 +224,7 @@ void OinkMode::update() {
                 autoState = AutoState::LOCKING;
                 stateStartTime = now;
                 deauthing = false;  // Don't deauth yet, just listen
+                channelHopping = false;  // Ensure channel stays locked during capture phase
                 
                 Serial.printf("[OINK] Locking to %s (ch%d) - discovering clients...\n", 
                              networks[selectionIndex].ssid,
@@ -326,12 +327,41 @@ void OinkMode::update() {
                 autoState = AutoState::WAITING;
                 stateStartTime = now;
                 deauthing = false;
+                // Keep channel locked during WAITING to catch late EAPOL responses
+                // Channel hopping resumes only when moving to NEXT_TARGET with no pending handshake
             }
             break;
             
         case AutoState::WAITING:
-            // Brief pause between attacks
+            // Brief pause between attacks - keep channel locked for late EAPOL frames
             if (now - stateStartTime > WAIT_TIME) {
+                // Check for incomplete handshake only once at WAIT_TIME threshold
+                // to avoid repeated vector iteration overhead
+                static bool checkedForPendingHandshake = false;
+                static bool hasPendingHandshake = false;
+                
+                if (!checkedForPendingHandshake) {
+                    checkedForPendingHandshake = true;
+                    hasPendingHandshake = false;
+                    if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
+                        for (const auto& hs : handshakes) {
+                            if (memcmp(hs.bssid, networks[targetIndex].bssid, 6) == 0 && 
+                                hs.hasM1() && !hs.hasM2()) {
+                                hasPendingHandshake = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (hasPendingHandshake && now - stateStartTime < WAIT_TIME * 2) {
+                    // Extended wait for pending handshake (up to 2x normal = 4 sec total)
+                    break;
+                }
+                
+                // Reset for next WAITING state
+                checkedForPendingHandshake = false;
+                hasPendingHandshake = false;
                 autoState = AutoState::NEXT_TARGET;
             }
             break;
