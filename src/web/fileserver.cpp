@@ -26,160 +26,246 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PORKCHOP File Manager</title>
     <style>
+        :root { --pink: #FFAEAD; --bg: #000; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
-            background: #000; 
-            color: #fff; 
+            background: var(--bg); 
+            color: var(--pink); 
             font-family: 'Courier New', monospace;
+            font-size: 1.0em;
             padding: 20px;
             max-width: 900px;
             margin: 0 auto;
         }
-        h1 { 
-            border-bottom: 2px solid #fff; 
-            padding-bottom: 10px; 
+        .logo {
+            white-space: pre;
+            font-size: 0.35em;
+            line-height: 1.1;
             margin-bottom: 10px;
-            font-size: 1.5em;
+            overflow-x: auto;
+        }
+        .header {
+            border-bottom: 2px solid var(--pink);
+            padding-bottom: 10px;
+            margin-bottom: 15px;
         }
         .sd-info {
-            color: #888;
-            margin-bottom: 15px;
-            font-size: 0.9em;
+            opacity: 0.6;
+            font-size: 0.85em;
+            margin-top: 5px;
         }
         .breadcrumb {
             margin: 10px 0;
-            padding: 8px;
-            background: #111;
-            border: 1px solid #333;
+            padding: 10px 12px;
+            background: #0a0505;
+            border: 1px solid #331a1a;
+            font-size: 0.95em;
         }
-        .breadcrumb a { color: #fff; text-decoration: none; }
+        .breadcrumb a { color: var(--pink); text-decoration: none; }
         .breadcrumb a:hover { text-decoration: underline; }
+        .breadcrumb span { opacity: 0.5; }
         .file-list {
-            border: 1px solid #444;
+            border: 1px solid #331a1a;
             margin: 10px 0;
         }
         .file-item { 
             display: flex; 
             justify-content: space-between; 
             align-items: center;
-            padding: 10px;
-            border-bottom: 1px solid #333;
+            padding: 12px 10px;
+            border-bottom: 1px solid #1a0d0d;
+            transition: background 0.1s;
         }
-        .file-item:hover { background: #111; }
+        .file-item:hover { background: #0f0808; }
         .file-item:last-child { border-bottom: none; }
-        .file-icon { margin-right: 10px; }
-        .file-name { flex: 1; cursor: pointer; }
-        .file-name a { color: #fff; text-decoration: none; }
+        .file-icon { 
+            width: 24px; 
+            text-align: center; 
+            margin-right: 8px; 
+            opacity: 0.6;
+        }
+        .file-icon.dir { opacity: 1; }
+        .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+        .file-name a { color: var(--pink); text-decoration: none; }
         .file-name a:hover { text-decoration: underline; }
-        .file-size { color: #888; margin: 0 15px; min-width: 80px; text-align: right; }
+        .file-size { opacity: 0.5; margin: 0 15px; min-width: 70px; text-align: right; font-size: 0.85em; }
+        .file-actions { display: flex; gap: 5px; }
         .btn {
-            background: #fff;
-            color: #000;
+            background: var(--pink);
+            color: var(--bg);
             border: none;
-            padding: 5px 12px;
+            padding: 6px 14px;
             cursor: pointer;
             font-family: inherit;
-            font-size: 0.9em;
-            margin-left: 5px;
+            font-size: 0.85em;
+            transition: opacity 0.15s;
         }
-        .btn:hover { background: #ccc; }
-        .btn-del { background: #333; color: #fff; border: 1px solid #fff; }
-        .btn-del:hover { background: #500; }
-        .btn-small { padding: 3px 8px; font-size: 0.8em; }
+        .btn:hover { opacity: 0.8; }
+        .btn:active { opacity: 0.6; }
+        .btn-outline { background: transparent; color: var(--pink); border: 1px solid var(--pink); opacity: 0.7; }
+        .btn-outline:hover { opacity: 1; background: #1a0d0d; }
+        .btn-danger { background: transparent; color: var(--pink); border: 1px solid var(--pink); opacity: 0.5; }
+        .btn-danger:hover { opacity: 1; background: #1a0505; }
+        .btn-sm { padding: 4px 10px; font-size: 0.8em; }
         .toolbar {
             display: flex;
-            gap: 10px;
-            margin: 15px 0;
+            gap: 8px;
+            margin: 12px 0;
             flex-wrap: wrap;
+            align-items: center;
         }
-        .upload-section {
-            padding: 15px;
-            border: 1px solid #fff;
-            margin-top: 15px;
+        .upload-btn {
+            position: relative;
+            overflow: hidden;
         }
-        .upload-section input[type="file"] { 
+        .upload-btn input[type="file"] {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .dropzone {
+            border: 2px dashed #331a1a;
+            padding: 20px;
+            text-align: center;
+            opacity: 0.5;
             margin: 10px 0;
-            color: #fff;
+            transition: all 0.2s;
+            display: none;
         }
+        .dropzone.active {
+            display: block;
+        }
+        .dropzone.dragover {
+            border-color: var(--pink);
+            opacity: 1;
+            background: #0a0505;
+        }
+        .progress-container {
+            margin: 10px 0;
+            display: none;
+        }
+        .progress-container.active { display: block; }
         .progress-bar {
             width: 100%;
-            height: 20px;
-            background: #333;
-            margin-top: 10px;
-            display: none;
+            height: 6px;
+            background: #1a0d0d;
+            border-radius: 3px;
+            overflow: hidden;
         }
         .progress-fill {
             height: 100%;
-            background: #fff;
+            background: var(--pink);
             width: 0%;
             transition: width 0.2s;
         }
-        .status { 
-            color: #888; 
-            margin-top: 15px; 
-            font-size: 0.9em;
+        .progress-text {
+            font-size: 0.8em;
+            opacity: 0.6;
+            margin-top: 5px;
         }
+        .status { 
+            font-size: 0.85em;
+            padding: 8px 0;
+            min-height: 24px;
+            opacity: 0.7;
+        }
+        .status.success { opacity: 1; }
+        .status.error { opacity: 1; }
         input[type="text"] {
-            background: #000;
-            color: #fff;
-            border: 1px solid #fff;
-            padding: 5px 10px;
+            background: #0a0505;
+            color: var(--pink);
+            border: 1px solid #331a1a;
+            padding: 8px 12px;
             font-family: inherit;
+            font-size: 1em;
+            width: 100%;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--pink);
         }
         .modal {
             display: none;
             position: fixed;
             top: 0; left: 0;
             width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.9);
             justify-content: center;
             align-items: center;
+            z-index: 100;
         }
         .modal-content {
-            background: #000;
-            border: 2px solid #fff;
-            padding: 20px;
-            max-width: 400px;
+            background: var(--bg);
+            border: 1px solid var(--pink);
+            padding: 25px;
+            max-width: 350px;
+            width: 90%;
         }
-        .modal-content h3 { margin-bottom: 15px; }
-        .modal-content input { width: 100%; margin: 10px 0; }
+        .modal-content h3 { margin-bottom: 20px; font-weight: normal; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            opacity: 0.4;
+        }
+        @media (max-width: 600px) {
+            .logo { font-size: 0.25em; }
+            .file-size { display: none; }
+            .btn { padding: 8px 12px; }
+        }
     </style>
 </head>
 <body>
-    <h1>PORKCHOP File Manager</h1>
-    <div class="sd-info" id="sdInfo">Loading SD info...</div>
+    <div class="header">
+        <pre class="logo"> ██▓███   ▒█████   ██▀███   ██ ▄█▀ ▄████▄   ██░ ██  ▒█████   ██▓███  
+▓██░  ██▒▒██▒  ██▒▓██ ▒ ██▒ ██▄█▒ ▒██▀ ▀█  ▓██░ ██▒▒██▒  ██▒▓██░  ██▒
+▓██░ ██▓▒▒██░  ██▒▓██ ░▄█ ▒▓███▄░ ▒▓█    ▄ ▒██▀▀██░▒██░  ██▒▓██░ ██▓▒
+▒██▄█▓▒ ▒▒██   ██░▒██▀▀█▄  ▓██ █▄ ▒▓▓▄ ▄██▒░▓█ ░██ ▒██   ██░▒██▄█▓▒ ▒
+▒██▒ ░  ░░ ████▓▒░░██▓ ▒██▒▒██▒ █▄▒ ▓███▀ ░░▓█▒░██▓░ ████▓▒░▒██▒ ░  ░
+▒▓▒░ ░  ░░ ▒░▒░▒░ ░ ▒▓ ░▒▓░▒ ▒▒ ▓▒░ ░▒ ▒  ░ ▒ ░░▒░▒░ ▒░▒░▒░ ▒▓▒░ ░  ░
+░▒ ░       ░ ▒ ▒░   ░▒ ░ ▒░░ ░▒ ▒░  ░  ▒    ▒ ░▒░ ░  ░ ▒ ▒░ ░▒ ░     
+░░       ░ ░ ░ ▒    ░░   ░ ░ ░░ ░ ░         ░  ░░ ░░ ░ ░ ▒  ░░       
+             ░ ░     ░     ░  ░   ░ ░       ░  ░  ░    ░ ░           
+                                  ░                                  </pre>
+        <div class="sd-info" id="sdInfo">Loading...</div>
+    </div>
     
     <div class="breadcrumb" id="breadcrumb"></div>
     
     <div class="toolbar">
-        <button class="btn" onclick="loadDir(currentPath)">Refresh</button>
-        <button class="btn" onclick="showNewFolderModal()">New Folder</button>
-        <button class="btn" onclick="downloadAll()">Download All (ZIP)</button>
+        <button class="btn btn-outline" onclick="loadDir(currentPath)">Refresh</button>
+        <button class="btn btn-outline" onclick="showNewFolderModal()">+ Folder</button>
+        <label class="btn upload-btn">
+            Upload
+            <input type="file" id="fileInput" name="file" multiple onchange="uploadFiles(this.files)">
+        </label>
+    </div>
+    
+    <div class="dropzone" id="dropzone">
+        Drop files here to upload
+    </div>
+    
+    <div class="progress-container" id="progressContainer">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-text" id="progressText">Uploading...</div>
     </div>
     
     <div class="file-list" id="fileList"></div>
     
-    <div class="upload-section">
-        <strong>Upload to current folder</strong>
-        <form id="uploadForm" enctype="multipart/form-data">
-            <input type="file" id="fileInput" name="file" multiple>
-            <button type="submit" class="btn">Upload</button>
-        </form>
-        <div class="progress-bar" id="progressBar">
-            <div class="progress-fill" id="progressFill"></div>
-        </div>
-    </div>
-    
-    <div class="status" id="status">Ready</div>
+    <div class="status" id="status"></div>
     
     <!-- New Folder Modal -->
-    <div class="modal" id="newFolderModal">
+    <div class="modal" id="newFolderModal" onclick="if(event.target===this)hideModal()">
         <div class="modal-content">
-            <h3>Create New Folder</h3>
-            <input type="text" id="newFolderName" placeholder="Folder name">
-            <div style="margin-top: 15px;">
+            <h3>New Folder</h3>
+            <input type="text" id="newFolderName" placeholder="Folder name" onkeydown="if(event.key==='Enter')createFolder();if(event.key==='Escape')hideModal()">
+            <div class="modal-actions">
                 <button class="btn" onclick="createFolder()">Create</button>
-                <button class="btn btn-del" onclick="hideModal()">Cancel</button>
+                <button class="btn btn-outline" onclick="hideModal()">Cancel</button>
             </div>
         </div>
     </div>
@@ -191,22 +277,22 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             try {
                 const resp = await fetch('/api/sdinfo');
                 const info = await resp.json();
+                const pct = ((info.used / info.total) * 100).toFixed(0);
                 document.getElementById('sdInfo').textContent = 
-                    'SD Card: ' + formatSize(info.used) + ' used / ' + formatSize(info.total) + ' total (' + 
-                    formatSize(info.free) + ' free)';
+                    formatSize(info.used) + ' / ' + formatSize(info.total) + ' (' + pct + '% used)';
             } catch(e) {
-                document.getElementById('sdInfo').textContent = 'SD info unavailable';
+                document.getElementById('sdInfo').textContent = 'SD card unavailable';
             }
         }
         
         function updateBreadcrumb() {
             const parts = currentPath.split('/').filter(p => p);
-            let html = '<a href="#" onclick="loadDir(\'/\');return false;">/root</a>';
+            let html = '<a href="#" onclick="loadDir(\'/\');return false;">~</a>';
             let path = '';
             for (const p of parts) {
                 path += '/' + p;
                 const safePath = path;
-                html += ' / <a href="#" onclick="loadDir(\'' + safePath + '\');return false;">' + p + '</a>';
+                html += ' <span>/</span> <a href="#" onclick="loadDir(\'' + safePath + '\');return false;">' + p + '</a>';
             }
             document.getElementById('breadcrumb').innerHTML = html;
         }
@@ -216,7 +302,7 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             updateBreadcrumb();
             
             const container = document.getElementById('fileList');
-            container.innerHTML = '<div class="file-item">Loading...</div>';
+            container.innerHTML = '<div class="file-item" style="color:#666">Loading...</div>';
             
             try {
                 const resp = await fetch('/api/ls?dir=' + encodeURIComponent(currentPath) + '&full=1');
@@ -228,39 +314,54 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
                 if (currentPath !== '/') {
                     const parent = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
                     html += '<div class="file-item">';
-                    html += '<span class="file-icon">[..]</span>';
-                    html += '<span class="file-name"><a href="#" onclick="loadDir(\'' + parent + '\');return false;">..</a></span>';
+                    html += '<span class="file-icon dir">..</span>';
+                    html += '<span class="file-name"><a href="#" onclick="loadDir(\'' + parent + '\');return false;">Parent Directory</a></span>';
                     html += '<span class="file-size"></span>';
+                    html += '<div class="file-actions"></div>';
                     html += '</div>';
                 }
                 
                 // Folders first
-                for (const item of items.filter(i => i.isDir)) {
+                for (const item of items.filter(i => i.isDir).sort((a,b) => a.name.localeCompare(b.name))) {
                     const itemPath = (currentPath === '/' ? '' : currentPath) + '/' + item.name;
+                    const escapedPath = itemPath.replace(/'/g, "\\'");
                     html += '<div class="file-item">';
-                    html += '<span class="file-icon">[D]</span>';
-                    html += '<span class="file-name"><a href="#" onclick="loadDir(\'' + itemPath + '\');return false;">' + item.name + '/</a></span>';
-                    html += '<span class="file-size">-</span>';
-                    html += '<button class="btn btn-del btn-small" onclick="del(\'' + itemPath + '\', true)">X</button>';
-                    html += '</div>';
+                    html += '<span class="file-icon dir">/</span>';
+                    html += '<span class="file-name"><a href="#" onclick="loadDir(\'' + escapedPath + '\');return false;">' + escapeHtml(item.name) + '</a></span>';
+                    html += '<span class="file-size"></span>';
+                    html += '<div class="file-actions">';
+                    html += '<button class="btn btn-danger btn-sm" onclick="del(\'' + escapedPath + '\', true)">Del</button>';
+                    html += '</div></div>';
                 }
                 
                 // Then files
-                for (const item of items.filter(i => !i.isDir)) {
+                for (const item of items.filter(i => !i.isDir).sort((a,b) => a.name.localeCompare(b.name))) {
                     const itemPath = (currentPath === '/' ? '' : currentPath) + '/' + item.name;
+                    const escapedPath = itemPath.replace(/'/g, "\\'");
                     html += '<div class="file-item">';
-                    html += '<span class="file-icon">[F]</span>';
-                    html += '<span class="file-name">' + item.name + '</span>';
+                    html += '<span class="file-icon">*</span>';
+                    html += '<span class="file-name">' + escapeHtml(item.name) + '</span>';
                     html += '<span class="file-size">' + formatSize(item.size) + '</span>';
-                    html += '<button class="btn btn-small" onclick="download(\'' + itemPath + '\')">DL</button>';
-                    html += '<button class="btn btn-del btn-small" onclick="del(\'' + itemPath + '\', false)">X</button>';
-                    html += '</div>';
+                    html += '<div class="file-actions">';
+                    html += '<button class="btn btn-outline btn-sm" onclick="download(\'' + escapedPath + '\')">Get</button>';
+                    html += '<button class="btn btn-danger btn-sm" onclick="del(\'' + escapedPath + '\', false)">Del</button>';
+                    html += '</div></div>';
                 }
                 
-                container.innerHTML = html || '<div class="file-item">Empty folder</div>';
+                if (!html && currentPath === '/') {
+                    html = '<div class="empty-state">No files yet</div>';
+                } else if (!html) {
+                    html = '<div class="empty-state">Empty folder</div>';
+                }
+                
+                container.innerHTML = html;
             } catch (e) {
-                container.innerHTML = '<div class="file-item">Error loading directory</div>';
+                container.innerHTML = '<div class="empty-state">Error loading directory</div>';
             }
+        }
+        
+        function escapeHtml(str) {
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         }
         
         function formatSize(bytes) {
@@ -274,26 +375,26 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             window.location.href = '/download?f=' + encodeURIComponent(path);
         }
         
-        async function downloadAll() {
-            document.getElementById('status').textContent = 'Preparing ZIP...';
-            window.location.href = '/downloadzip?dir=' + encodeURIComponent(currentPath);
-            setTimeout(() => {
-                document.getElementById('status').textContent = 'ZIP download started';
-            }, 1000);
-        }
-        
         async function del(path, isDir) {
-            const msg = isDir ? 'Delete folder ' + path + ' and all contents?' : 'Delete ' + path + '?';
+            const name = path.split('/').pop();
+            const msg = isDir ? 'Delete folder "' + name + '" and all contents?' : 'Delete "' + name + '"?';
             if (!confirm(msg)) return;
             
+            setStatus('Deleting...', '');
             const endpoint = isDir ? '/rmdir' : '/delete';
             const resp = await fetch(endpoint + '?f=' + encodeURIComponent(path));
             if (resp.ok) {
-                document.getElementById('status').textContent = 'Deleted: ' + path;
+                setStatus('Deleted: ' + name, 'success');
                 loadDir(currentPath);
             } else {
-                document.getElementById('status').textContent = 'Delete failed';
+                setStatus('Delete failed', 'error');
             }
+        }
+        
+        function setStatus(msg, type) {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.className = 'status' + (type ? ' ' + type : '');
         }
         
         function showNewFolderModal() {
@@ -314,71 +415,93 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             const path = (currentPath === '/' ? '' : currentPath) + '/' + name;
             const resp = await fetch('/mkdir?f=' + encodeURIComponent(path));
             if (resp.ok) {
-                document.getElementById('status').textContent = 'Created: ' + path;
+                setStatus('Created: ' + name, 'success');
                 hideModal();
                 loadDir(currentPath);
             } else {
-                document.getElementById('status').textContent = 'Create folder failed';
+                setStatus('Create folder failed', 'error');
             }
         }
         
-        document.getElementById('uploadForm').onsubmit = async function(e) {
-            e.preventDefault();
-            const fileInput = document.getElementById('fileInput');
+        async function uploadFiles(files) {
+            if (!files || !files.length) return;
             
-            if (!fileInput.files.length) {
-                alert('Select file(s) first');
-                return;
-            }
+            const container = document.getElementById('progressContainer');
+            const fill = document.getElementById('progressFill');
+            const text = document.getElementById('progressText');
+            container.classList.add('active');
             
-            const progressBar = document.getElementById('progressBar');
-            const progressFill = document.getElementById('progressFill');
-            progressBar.style.display = 'block';
-            progressFill.style.width = '0%';
-            
-            for (let i = 0; i < fileInput.files.length; i++) {
-                const file = fileInput.files[i];
-                document.getElementById('status').textContent = 'Uploading ' + (i+1) + '/' + fileInput.files.length + ': ' + file.name;
+            let uploaded = 0;
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                text.textContent = 'Uploading ' + (i+1) + '/' + files.length + ': ' + file.name;
+                fill.style.width = '0%';
                 
                 const formData = new FormData();
                 formData.append('file', file);
                 
                 try {
-                    const xhr = new XMLHttpRequest();
-                    
                     await new Promise((resolve, reject) => {
-                        xhr.upload.onprogress = function(e) {
+                        const xhr = new XMLHttpRequest();
+                        xhr.upload.onprogress = (e) => {
                             if (e.lengthComputable) {
-                                const pct = (e.loaded / e.total * 100);
-                                progressFill.style.width = pct + '%';
+                                fill.style.width = (e.loaded / e.total * 100) + '%';
                             }
                         };
-                        xhr.onload = function() {
-                            if (xhr.status === 200) resolve();
-                            else reject(new Error('Upload failed'));
-                        };
-                        xhr.onerror = reject;
+                        xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error('Failed'));
+                        xhr.onerror = () => reject(new Error('Network error'));
                         xhr.open('POST', '/upload?dir=' + encodeURIComponent(currentPath));
                         xhr.send(formData);
                     });
+                    uploaded++;
                 } catch (e) {
-                    document.getElementById('status').textContent = 'Upload error: ' + e.message;
-                    progressBar.style.display = 'none';
-                    return;
+                    setStatus('Upload error: ' + file.name, 'error');
                 }
             }
             
-            progressBar.style.display = 'none';
-            document.getElementById('status').textContent = 'Upload complete!';
-            fileInput.value = '';
+            container.classList.remove('active');
+            document.getElementById('fileInput').value = '';
+            
+            if (uploaded === files.length) {
+                setStatus('Uploaded ' + uploaded + ' file(s)', 'success');
+            } else {
+                setStatus('Uploaded ' + uploaded + '/' + files.length + ' files', uploaded > 0 ? 'success' : 'error');
+            }
             loadDir(currentPath);
-        };
+        }
         
-        // Handle Enter key in modal
-        document.getElementById('newFolderName').onkeydown = function(e) {
-            if (e.key === 'Enter') createFolder();
-            if (e.key === 'Escape') hideModal();
-        };
+        // Drag and drop
+        const dropzone = document.getElementById('dropzone');
+        let dragCounter = 0;
+        
+        document.body.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragCounter++;
+            dropzone.classList.add('active');
+        });
+        
+        document.body.addEventListener('dragleave', (e) => {
+            dragCounter--;
+            if (dragCounter === 0) dropzone.classList.remove('active');
+        });
+        
+        document.body.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
+        });
+        
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dragover');
+        });
+        
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dragCounter = 0;
+            dropzone.classList.remove('active', 'dragover');
+            if (e.dataTransfer.files.length) {
+                uploadFiles(e.dataTransfer.files);
+            }
+        });
         
         // Initial load
         loadSDInfo();
