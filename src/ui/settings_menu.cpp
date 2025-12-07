@@ -96,6 +96,14 @@ void SettingsMenu::loadFromConfig() {
         0, 1, 1, "", ""
     });
     
+    // GPS Scan Interval (seconds between scans in WARHOG mode)
+    items.push_back({
+        "Scan Intv",
+        SettingType::VALUE,
+        (int)Config::gps().updateInterval,
+        1, 30, 1, "s", ""
+    });
+    
     // GPS Baud Rate (common values: 9600, 38400, 57600, 115200)
     // Use index 0-3 to represent these values
     int baudIndex = 3;  // Default to 115200
@@ -159,17 +167,18 @@ void SettingsMenu::saveToConfig() {
     auto& g = Config::gps();
     g.enabled = items[7].value == 1;
     g.powerSave = items[8].value == 1;
+    g.updateInterval = items[9].value;  // Scan interval in seconds
     
     // Convert baud index to actual baud rate
     static const uint32_t baudRates[] = {9600, 38400, 57600, 115200};
-    g.baudRate = baudRates[items[9].value];
+    g.baudRate = baudRates[items[10].value];
     
-    g.timezoneOffset = items[10].value;
+    g.timezoneOffset = items[11].value;
     Config::setGPS(g);
     
     // ML settings
     auto& m = Config::ml();
-    m.collectionMode = static_cast<MLCollectionMode>(items[11].value);
+    m.collectionMode = static_cast<MLCollectionMode>(items[12].value);
     Config::setML(m);
     
     // Save to file
