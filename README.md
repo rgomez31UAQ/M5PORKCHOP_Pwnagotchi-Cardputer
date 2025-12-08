@@ -154,14 +154,14 @@
 
     Toggle in Settings: [ML Mode: Basic/Enhanced]
 
-    Each network gets an anomalyScore (0.0-1.0) based on:
+    Each network gets an anomalyScore 0.0-1.0 based on:
 
-        * RSSI > -30 dBm         (suspiciously strong)
-        * Open or WEP encryption (lol what year is it)
-        * Hidden SSID            (something to hide?)
-        * Non-standard beacon    (not 100ms = sketchy)
-        * No HT capabilities     (router from 2007?)
-        * WPS on open network    (honeypot fingerprint)
+        * RSSI > -30 dBm         Suspiciously strong. Honeypot range.
+        * Open or WEP encryption What year is it?
+        * Hidden SSID            Something to hide?
+        * Non-standard beacon    Not 100ms = software AP.
+        * No HT capabilities     Ancient router or spoofed.
+        * WPS on open network    Classic honeypot fingerprint.
 
 
 --[ 4 - Hardware
@@ -201,14 +201,14 @@
         +-------+----------------------------------+
         | Key   | What it does                     |
         +-------+----------------------------------+
-        | O     | Enter OINK mode (hunting)        |
-        | W     | Enter WARHOG mode (wardriving)   |
+        | O     | OINK mode - start hunting        |
+        | W     | WARHOG mode - start wardriving   |
         | S     | Settings menu                    |
         | `     | Toggle menu / Go back            |
         | ;     | Navigate up / Decrease value     |
         | .     | Navigate down / Increase value   |
         | Enter | Select / Toggle / Confirm        |
-        | G0    | Return to IDLE from any mode     |
+        | G0    | Bail out - return to IDLE        |
         +-------+----------------------------------+
 
     G0 is the physical button on the top side of the M5Cardputer.
@@ -228,8 +228,8 @@
         (o 00)      (^ 00)      (@ 00)      (> 00)      (- 00)      (T 00)
         (    )      (    )      (    )      (    )      (    )      (    )
 
-    (Yes, we spent actual development time on pig facial expressions.
-    No regrets.)
+    Yes, we spent actual development time on pig facial expressions.
+    No regrets.
 
 
 ----[ 6.2 - OINK Mode Screen
@@ -303,11 +303,11 @@
         +------------+-------------------------------+---------+
         | Setting    | Description                   | Default |
         +------------+-------------------------------+---------+
-        | WiFi SSID  | Network for file transfer     | (empty) |
-        | WiFi Pass  | Password for that network     | (empty) |
+        | WiFi SSID  | Network for file transfer     | -       |
+        | WiFi Pass  | Password for that network     | -       |
         | Sound      | Beeps when things happen      | ON      |
         | Brightness | Display brightness            | 80%     |
-        | Dim After  | Screen dim timeout (0=never)  | 30s     |
+        | Dim After  | Screen dim timeout, 0=never   | 30s     |
         | Dim Level  | Brightness when dimmed        | 10%     |
         | CH Hop     | Channel hop interval          | 500ms   |
         | Scan Time  | Dwell time per channel        | 2000ms  |
@@ -333,7 +333,7 @@
     How it works:
         - Every network gets 32 features extracted from beacon frames
         - Data accumulates in memory as you drive around
-        - Every 60 seconds, WARHOG dumps to /ml_training.csv (crash protection)
+        - Every 60 seconds, WARHOG dumps to /ml_training.csv - crash protection
         - When you stop WARHOG (G0 button), final export happens
         - Worst case you lose 1 minute of data if piggy crashes
 
@@ -356,8 +356,8 @@
 
         normal        = Legit ISP routers, standard secure configs
         rogue_ap      = Strong signal + suspicious characteristics
-        evil_twin     = Impersonating known network (manual label)
-        deauth_target = No WPA3/PMF (can be deauthed)
+        evil_twin     = Impersonating known network - label manually
+        deauth_target = No WPA3/PMF - free real estate
         vulnerable    = Open/WEP/WPS enabled
 
     The auto-labeler catches the obvious stuff. For real rogue/evil twin
