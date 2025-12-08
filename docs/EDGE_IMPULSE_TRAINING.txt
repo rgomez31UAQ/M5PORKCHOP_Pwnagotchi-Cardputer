@@ -1,0 +1,261 @@
+--[ Edge Impulse Training Guide for Porkchop
+
+    WiFi Security Classifier - From CSV to ESP32
+
+==============================================================================
+
+--[ 1 - Prepare Your Data
+
+    Before uploading to Edge Impulse, run the prep script:
+
+        py.exe scripts/prepare_ml_data.py ml_training.csv
+
+    This creates ml_training_ei.csv with:
+      - 32 numeric features (no BSSID/SSID strings)
+      - String labels: normal, vulnerable, deauth_target, rogue_ap, evil_twin
+      - Ready for Edge Impulse CSV Wizard
+
+==============================================================================
+
+--[ 2 - Create Edge Impulse Project
+
+    1. Go to https://studio.edgeimpulse.com
+    2. Create account or log in
+    3. Click "Create new project"
+    4. Name it: "Porkchop WiFi Classifier"
+    5. Select project type: "Classify new data" (not Object Detection)
+
+==============================================================================
+
+--[ 3 - Configure Target Device
+
+    Click the target device button (top right, shows "No device selected")
+
+    Enter these settings:
+    +---------------------+-------------------+
+    | Field               | Value             |
+    +---------------------+-------------------+
+    | Target device       | Custom            |
+    | Processor family    | ESP32             |
+    | Clock rate          | 240 MHz           |
+    | Accelerator         | None              |
+    | Custom device name  | M5Cardputer       |
+    | RAM                 | 1 MB              |
+    | ROM                 | 1 MB              |
+    | Latency             | 100 ms            |
+    +---------------------+-------------------+
+
+==============================================================================
+
+--[ 4 - Upload Data via CSV Wizard
+
+    1. Go to "Data acquisition" in left menu
+    2. Click "CSV Wizard" button (not regular upload!)
+    3. Upload ml_training_ei.csv
+    4. CSV Wizard will auto-detect columns
+
+    When prompted:
+      - Is this time-series data? -> NO
+      - Which column contains labels? -> "label" (last column)
+      - All other columns are features
+
+    5. Click "Upload data"
+    6. Split suggestion: Accept 80/20 train/test split
+
+    After upload you should see samples organized by label:
+      - deauth_target: ~187 samples
+      - normal: ~33 samples  
+      - vulnerable: ~13 samples
+
+==============================================================================
+
+--[ 5 - Create Impulse
+
+    1. Go to "Create impulse" in left menu
+    2. Configure blocks:
+
+    +------------------+     +------------------+     +------------------+
+    | INPUT BLOCK      | --> | PROCESSING BLOCK | --> | LEARNING BLOCK   |
+    | Tabular data     |     | Raw Data         |     | Classification   |
+    | 32 features      |     | (no processing)  |     | (Keras)          |
+    +------------------+     +------------------+     +------------------+
+
+    Input block settings:
+      - Type: Tabular data
+      - Number of features: 32 (auto-detected)
+
+    Processing block:
+      - Add "Raw Data" block (we already have processed features)
+
+    Learning block:
+      - Add "Classification" block
+
+    3. Click "Save Impulse"
+
+==============================================================================
+
+--[ 6 - Configure Raw Data Block
+
+    1. Click "Raw Data" in left menu (under Impulse design)
+    2. No changes needed - our features are already normalized
+    3. Click "Save parameters"
+    4. Click "Generate features"
+
+    Wait for processing. You'll see a feature explorer visualization.
+    Clusters should show some separation between classes.
+
+==============================================================================
+
+--[ 7 - Train Neural Network
+
+    1. Click "Classifier" in left menu
+    2. Configure neural network:
+
+    Recommended architecture (small, fast on ESP32):
+    +--------------------------------+
+    | Neural network settings        |
+    +--------------------------------+
+    | Number of training cycles: 100 |
+    | Learning rate: 0.001           |
+    | Minimum confidence: 0.6        |
+    +--------------------------------+
+
+    Neural network architecture:
+    +--------------------------------+
+    | Input layer (32 features)      |
+    +--------------------------------+
+    | Dense layer: 20 neurons, ReLU  |
+    +--------------------------------+
+    | Dense layer: 10 neurons, ReLU  |
+    +--------------------------------+
+    | Output layer: 5 neurons        |
+    | (softmax, one per class)       |
+    +--------------------------------+
+
+    3. Click "Start training"
+    4. Wait for training to complete (~1-2 minutes)
+    5. Check accuracy - aim for >80%
+
+    Note: With imbalanced data (187 vs 33 vs 13), accuracy can be misleading.
+          Check the confusion matrix for per-class performance.
+
+==============================================================================
+
+--[ 8 - Test Model
+
+    1. Click "Model testing" in left menu
+    2. Click "Classify all"
+    3. Review results
+
+    Check confusion matrix:
+      - Diagonal = correct predictions
+      - Off-diagonal = misclassifications
+
+    If accuracy is low:
+      - Collect more training data (especially minority classes)
+      - Try different network architecture
+      - Adjust class weights in training
+
+==============================================================================
+
+--[ 9 - Deploy to Arduino/ESP32
+
+    1. Go to "Deployment" in left menu
+    2. Select "Arduino library"
+    3. Configure optimizations:
+
+    +---------------------------+------------------+
+    | Option                    | Recommended      |
+    +---------------------------+------------------+
+    | EON Compiler              | ENABLED          |
+    | Quantization              | int8             |
+    | Target                    | ESP32            |
+    +---------------------------+------------------+
+
+    EON = Edge Optimized Neural (smaller, faster)
+    int8 = 4x smaller than float32
+
+    4. Click "Build"
+    5. Download the .zip file
+
+==============================================================================
+
+--[ 10 - Import to Porkchop
+
+    1. Extract downloaded zip
+    2. Find the library folder (named like "porkchop-wifi-classifier_inferencing")
+    3. Copy entire folder to: porkchop/lib/
+
+    Your structure should be:
+
+        porkchop/
+        +-- lib/
+        |   +-- porkchop-wifi-classifier_inferencing/
+        |       +-- src/
+        |       |   +-- edge-impulse-sdk/
+        |       |   +-- model-parameters/
+        |       |   +-- tflite-model/
+        |       +-- library.properties
+        |       +-- ...
+        +-- src/
+        +-- ...
+
+    4. Edit src/ml/edge_impulse.h:
+
+        // Uncomment this line:
+        #define EDGE_IMPULSE_ENABLED
+
+        // Update include to match your library name:
+        #include <porkchop-wifi-classifier_inferencing.h>
+
+    5. Build and upload:
+
+        pio run -t upload -e m5cardputer
+
+==============================================================================
+
+--[ 11 - Troubleshooting
+
+    ERROR: "No such file or directory: edge-impulse-sdk"
+    FIX:   Library not in lib/ folder, or wrong folder structure
+
+    ERROR: "EI_CLASSIFIER_... undefined"
+    FIX:   Include path wrong, check library header name
+
+    ERROR: "region 'dram' overflowed"
+    FIX:   Model too big. Enable int8 quantization, reduce neurons
+
+    ERROR: Low accuracy on device
+    FIX:   Features not normalized same as training.
+           Check feature extraction matches training data format
+
+    WARNING: Imbalanced classes
+    FIX:    Collect more samples for minority classes.
+            In Edge Impulse: Training > Expert mode > Add class weights
+
+==============================================================================
+
+--[ 12 - Collecting Better Training Data
+
+    For a robust model, you need:
+      - 100+ samples per class (minimum)
+      - 500+ samples per class (recommended)
+      - Real examples of each threat type
+
+    To get ROGUE_AP / EVIL_TWIN samples:
+      1. Set up test APs with Raspberry Pi or another ESP32
+      2. Clone a known SSID with different BSSID
+      3. Run high-power AP in unusual location
+      4. Capture with WARHOG mode
+
+    Merge multiple collection sessions:
+
+        Get-Content ml_training_*.csv | 
+          Where-Object { $_ -notmatch '^bssid' -or $_.ReadCount -eq 1 } |
+          Set-Content combined.csv
+
+        py.exe scripts/prepare_ml_data.py combined.csv combined_ei.csv
+
+==============================================================================
+
+==[EOF]==
