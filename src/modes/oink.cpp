@@ -786,22 +786,11 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
         }
         
         // Limit network count to prevent OOM
+        // NOTE: Don't do vector erase in callback - just drop if at capacity
+        // The update() loop handles cleanup of stale networks
         if (networks.size() >= MAX_NETWORKS) {
-            // Remove oldest network that isn't the target
-            bool removed = false;
-            for (size_t i = 0; i < networks.size(); i++) {
-                if ((int)i != targetIndex && !networks[i].isTarget) {
-                    networks.erase(networks.begin() + i);
-                    if (targetIndex > (int)i) targetIndex--;
-                    if (selectionIndex > (int)i) selectionIndex--;
-                    removed = true;
-                    break;
-                }
-            }
-            // If we couldn't remove anything (all are targets - shouldn't happen), skip adding
-            if (!removed) {
-                return;  // Don't add new network, we're at capacity
-            }
+            // At capacity - skip adding new network (update() will clean stale ones)
+            return;
         }
         
         // DEFERRED: Queue network add for main thread (avoids vector realloc in callback)
@@ -1067,39 +1056,10 @@ int OinkMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station
     }
     
     // Limit handshake count to prevent OOM
+    // NOTE: Don't do vector erase/free in callback - just drop if at capacity
+    // Complete handshakes are auto-saved, so dropping new ones is acceptable
     if (handshakes.size() >= MAX_HANDSHAKES) {
-        // Priority 1: Remove oldest saved handshake (already persisted to SD)
-        bool removed = false;
-        for (size_t i = 0; i < handshakes.size(); i++) {
-            if (handshakes[i].saved) {
-                if (handshakes[i].beaconData) {
-                    free(handshakes[i].beaconData);
-                }
-                handshakes.erase(handshakes.begin() + i);
-                removed = true;
-                break;
-            }
-        }
-        // Priority 2: Remove oldest incomplete handshake (unlikely to complete)
-        if (!removed) {
-            for (size_t i = 0; i < handshakes.size(); i++) {
-                if (!handshakes[i].isComplete()) {
-                    if (handshakes[i].beaconData) {
-                        free(handshakes[i].beaconData);
-                    }
-                    handshakes.erase(handshakes.begin() + i);
-                    removed = true;
-                    break;
-                }
-            }
-        }
-        // Priority 3: Remove oldest (first) entry as last resort
-        if (!removed && !handshakes.empty()) {
-            if (handshakes[0].beaconData) {
-                free(handshakes[0].beaconData);
-            }
-            handshakes.erase(handshakes.begin());
-        }
+        return -1;  // At capacity, can't create new handshake
     }
     
     handshakes.push_back(hs);
