@@ -27,6 +27,12 @@ static const uint16_t BLE_ADV_MAX_INTERVAL = 64;        // 40ms (64 * 0.625ms)
 static const uint8_t  MAX_ACTIVE_TARGETS = 4;           // Maximum targets to track
 static const uint8_t  MAX_TARGETS_FOR_MOOD = 255;       // Cap for uint8_t mood parameter
 
+// UI Constants
+static const uint16_t DIALOG_WIDTH = 200;               // Warning dialog width
+static const uint16_t DIALOG_HEIGHT = 70;               // Warning dialog height
+static const uint32_t DIALOG_TIMEOUT_MS = 5000;         // Warning dialog timeout
+static const uint32_t MOOD_UPDATE_INTERVAL_MS = 3000;   // Mood phrase update interval
+
 // Runtime config values (loaded from Config::ble())
 static uint16_t cfgBurstInterval = DEFAULT_BURST_INTERVAL_MS;
 static uint16_t cfgAdvDuration = DEFAULT_ADV_DURATION_MS;
@@ -261,13 +267,13 @@ bool PiggyBluesMode::showWarningDialog() {
     // Set bottom bar overlay for duration of dialog
     Display::setBottomOverlay("NO LOLLYGAGGIN'");
     
-    int boxW = 200;
-    int boxH = 70;
+    int boxW = DIALOG_WIDTH;
+    int boxH = DIALOG_HEIGHT;
     int boxX = (DISPLAY_W - boxW) / 2;
     int boxY = (MAIN_H - boxH) / 2;
     
     uint32_t startTime = millis();
-    uint32_t timeout = 5000;  // 5 seconds
+    uint32_t timeout = DIALOG_TIMEOUT_MS;
     
     while ((millis() - startTime) < timeout) {
         M5.update();
@@ -425,7 +431,7 @@ void PiggyBluesMode::update() {
     }
     
     // Update mood occasionally with target info
-    if (now - lastMoodUpdateTime > 3000) {
+    if (now - lastMoodUpdateTime > MOOD_UPDATE_INTERVAL_MS) {
         const char* vendorStr = nullptr;
         if (lastVendorUsed != BLEVendor::UNKNOWN) {
             switch (lastVendorUsed) {
@@ -550,7 +556,7 @@ void PiggyBluesMode::sendAppleJuice() {
     if (!pAdvertising) return;
     
     // Stop any current advertising first
-    if (NimBLEDevice::getAdvertising()->isAdvertising()) {
+    if (pAdvertising->isAdvertising()) {
         pAdvertising->stop();
     }
     
@@ -564,12 +570,11 @@ void PiggyBluesMode::sendAppleJuice() {
     if (useLongDevice) {
         int idx = random(0, APPLE_LONG_COUNT);
         payload = APPLE_DEVICES_LONG[idx];
-        len = 31;  // Long devices are 31 bytes
     } else {
         int idx = random(0, APPLE_SHORT_COUNT);
         payload = APPLE_DEVICES_SHORT[idx];
-        len = 23;  // Short devices are 23 bytes
     }
+    len = payload[0] + 1;  // First byte is length, +1 for the length byte itself
     
     // Use non-connectable advertising for BLE spam
     pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
@@ -658,7 +663,7 @@ void PiggyBluesMode::sendSamsungSpam() {
 void PiggyBluesMode::sendWindowsSwiftPair() {
     if (!pAdvertising) return;
     
-    if (NimBLEDevice::getAdvertising()->isAdvertising()) {
+    if (pAdvertising->isAdvertising()) {
         pAdvertising->stop();
     }
     
