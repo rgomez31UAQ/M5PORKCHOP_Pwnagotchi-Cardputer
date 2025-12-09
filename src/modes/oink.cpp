@@ -12,11 +12,58 @@
 #include <SPI.h>
 #include <SD.h>
 #include <algorithm>
+#include <cstdarg>  // For va_list in deferred logging
 
 // Simple flag to avoid concurrent access between promiscuous callback and main thread
 // The promiscuous callback runs in WiFi task context (not true ISR), but still needs
 // synchronization to prevent race conditions on networks/handshakes vectors
 static volatile bool oinkBusy = false;
+
+// ============ Deferred Event System ============
+// Callback sets flags/data, update() processes them in main thread context
+// This avoids heap operations, String allocations, and Serial.printf in callback
+
+// Pending network to add (callback copies data here, update() does push_back)
+static volatile bool pendingNetworkAdd = false;
+static DetectedNetwork pendingNetwork;
+
+// Pending mood events (callback sets flag, update() calls Mood functions)
+static volatile bool pendingNewNetwork = false;
+static char pendingNetworkSSID[33] = {0};
+static int8_t pendingNetworkRSSI = 0;
+static uint8_t pendingNetworkChannel = 0;
+
+static volatile bool pendingDeauthSuccess = false;
+static uint8_t pendingDeauthStation[6] = {0};
+
+static volatile bool pendingHandshakeComplete = false;
+static char pendingHandshakeSSID[33] = {0};
+
+// Pending log messages (simple ring buffer for debug output)
+#define PENDING_LOG_SIZE 4
+#define PENDING_LOG_LEN 96
+static char pendingLogs[PENDING_LOG_SIZE][PENDING_LOG_LEN];
+static volatile uint8_t pendingLogHead = 0;
+static volatile uint8_t pendingLogTail = 0;
+
+static void queueLog(const char* fmt, ...) {
+    // Lock-free single-producer (callback) queue
+    uint8_t next = (pendingLogHead + 1) % PENDING_LOG_SIZE;
+    if (next == pendingLogTail) return;  // Full, drop message
+    
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(pendingLogs[pendingLogHead], PENDING_LOG_LEN, fmt, args);
+    va_end(args);
+    pendingLogHead = next;
+}
+
+static void flushLogs() {
+    while (pendingLogTail != pendingLogHead) {
+        Serial.println(pendingLogs[pendingLogTail]);
+        pendingLogTail = (pendingLogTail + 1) % PENDING_LOG_SIZE;
+    }
+}
 
 // Static members
 bool OinkMode::running = false;
@@ -78,6 +125,14 @@ static String lastPwnedSSID = "";
 void OinkMode::init() {
     // Reset busy flag in case of abnormal stop
     oinkBusy = false;
+    
+    // Reset deferred event system
+    pendingNetworkAdd = false;
+    pendingNewNetwork = false;
+    pendingDeauthSuccess = false;
+    pendingHandshakeComplete = false;
+    pendingLogHead = 0;
+    pendingLogTail = 0;
     
     // Free per-handshake beacon memory
     for (auto& hs : handshakes) {
@@ -191,6 +246,39 @@ void OinkMode::update() {
     
     // Guard access to networks/handshakes vectors from promiscuous callback
     oinkBusy = true;
+    
+    // ============ Process Deferred Events from Callback ============
+    // These events were queued in promiscuous callback to avoid heap/String ops there
+    
+    // Flush any pending log messages from callback
+    flushLogs();
+    
+    // Process pending network add
+    if (pendingNetworkAdd) {
+        networks.push_back(pendingNetwork);
+        pendingNetworkAdd = false;
+    }
+    
+    // Process pending mood: new network discovered
+    if (pendingNewNetwork) {
+        Mood::onNewNetwork(pendingNetworkSSID, pendingNetworkRSSI, pendingNetworkChannel);
+        pendingNewNetwork = false;
+    }
+    
+    // Process pending mood: deauth success
+    if (pendingDeauthSuccess) {
+        Mood::onDeauthSuccess(pendingDeauthStation);
+        pendingDeauthSuccess = false;
+    }
+    
+    // Process pending mood: handshake complete
+    if (pendingHandshakeComplete) {
+        Mood::onHandshakeCaptured(pendingHandshakeSSID);
+        lastPwnedSSID = String(pendingHandshakeSSID);
+        pendingHandshakeComplete = false;
+    }
+    
+    // ============ End Deferred Event Processing ============
     
     // Sync grass animation with channel hopping state
     Avatar::setGrassMoving(channelHopping);
@@ -587,7 +675,7 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
                 memcpy(beaconFrame, payload, len);
                 beaconFrameLen = len;
                 beaconCaptured = true;
-                Serial.printf("[OINK] Beacon captured for %s (%d bytes)\n", target->ssid, len);
+                queueLog("[OINK] Beacon captured for %s (%d bytes)", target->ssid, len);
             }
         }
     }
@@ -716,12 +804,22 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
             }
         }
         
-        networks.push_back(net);
-        Mood::onNewNetwork(net.ssid, net.rssi, net.channel);
-        
-        Serial.printf("[OINK] New network: %s (ch%d, %ddBm%s)\n", 
+        // DEFERRED: Queue network add for main thread (avoids vector realloc in callback)
+        if (!pendingNetworkAdd) {
+            memcpy(&pendingNetwork, &net, sizeof(DetectedNetwork));
+            
+            // Queue mood event data
+            strncpy(pendingNetworkSSID, net.ssid[0] ? net.ssid : "<hidden>", 32);
+            pendingNetworkSSID[32] = 0;
+            pendingNetworkRSSI = net.rssi;
+            pendingNetworkChannel = net.channel;
+            pendingNewNetwork = true;
+            pendingNetworkAdd = true;
+            
+            queueLog("[OINK] New network: %s (ch%d, %ddBm%s)", 
                      net.ssid[0] ? net.ssid : "<hidden>", net.channel, net.rssi,
                      net.hasPMF ? " PMF" : "");
+        }
     } else {
         // Update existing
         networks[idx].rssi = rssi;
@@ -754,8 +852,15 @@ void OinkMode::processProbeResponse(const uint8_t* payload, uint16_t len, int8_t
                 networks[idx].ssid[ieLen] = 0;
                 networks[idx].isHidden = false;
                 
-                Serial.printf("[OINK] Hidden SSID revealed: %s\n", networks[idx].ssid);
-                Mood::onNewNetwork(networks[idx].ssid, rssi, networks[idx].channel);
+                // DEFERRED: Queue mood event for main thread
+                if (!pendingNewNetwork) {
+                    strncpy(pendingNetworkSSID, networks[idx].ssid, 32);
+                    pendingNetworkSSID[32] = 0;
+                    pendingNetworkRSSI = rssi;
+                    pendingNetworkChannel = networks[idx].channel;
+                    pendingNewNetwork = true;
+                }
+                queueLog("[OINK] Hidden SSID revealed: %s", networks[idx].ssid);
                 break;
             }
             
@@ -869,10 +974,13 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
     // If we're deauthing this target, our deauth worked!
     if (messageNum == 1 && deauthing && targetIndex >= 0 && targetIndex < (int)networks.size()) {
         if (memcmp(bssid, networks[targetIndex].bssid, 6) == 0) {
-            // Deauth success - client is reconnecting!
-            Mood::onDeauthSuccess(station);
-            Serial.printf("[OINK] Deauth confirmed! Client %02X:%02X:%02X:%02X:%02X:%02X reconnecting\n",
-                         station[0], station[1], station[2], station[3], station[4], station[5]);
+            // DEFERRED: Queue deauth success for main thread
+            if (!pendingDeauthSuccess) {
+                memcpy(pendingDeauthStation, station, 6);
+                pendingDeauthSuccess = true;
+            }
+            queueLog("[OINK] Deauth confirmed! Client %02X:%02X:%02X:%02X:%02X:%02X reconnecting",
+                     station[0], station[1], station[2], station[3], station[4], station[5]);
         }
     }
     
@@ -903,19 +1011,23 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
         }
     }
     
-    Serial.printf("[OINK] EAPOL M%d captured! SSID:%s BSSID:%02X:%02X:%02X:%02X:%02X:%02X [%s%s%s%s]\n",
-                 messageNum, 
-                 hs.ssid[0] ? hs.ssid : "?",
-                 bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
-                 hs.hasM1() ? "1" : "-",
-                 hs.hasM2() ? "2" : "-",
-                 hs.hasM3() ? "3" : "-",
-                 hs.hasM4() ? "4" : "-");
+    queueLog("[OINK] EAPOL M%d captured! SSID:%s BSSID:%02X:%02X:%02X:%02X:%02X:%02X [%s%s%s%s]",
+             messageNum, 
+             hs.ssid[0] ? hs.ssid : "?",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+             hs.hasM1() ? "1" : "-",
+             hs.hasM2() ? "2" : "-",
+             hs.hasM3() ? "3" : "-",
+             hs.hasM4() ? "4" : "-");
     
     // Only trigger mood + beep when handshake becomes complete (not for each frame)
+    // DEFERRED: Queue handshake event for main thread (avoids String ops in callback)
     if (hs.isComplete() && !hs.saved) {
-        Mood::onHandshakeCaptured(hs.ssid);
-        lastPwnedSSID = String(hs.ssid);
+        if (!pendingHandshakeComplete) {
+            strncpy(pendingHandshakeSSID, hs.ssid, 32);
+            pendingHandshakeSSID[32] = 0;
+            pendingHandshakeComplete = true;
+        }
         autoSaveCheck();
     }
 }
@@ -948,8 +1060,8 @@ int OinkMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station
             if (hs.beaconData) {
                 memcpy(hs.beaconData, beaconFrame, beaconFrameLen);
                 hs.beaconLen = beaconFrameLen;
-                Serial.printf("[OINK] Beacon attached to handshake for %02X:%02X:%02X:%02X:%02X:%02X\n",
-                             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+                queueLog("[OINK] Beacon attached to handshake for %02X:%02X:%02X:%02X:%02X:%02X",
+                         bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
             }
         }
     }
@@ -1275,10 +1387,10 @@ void OinkMode::trackClient(const uint8_t* bssid, const uint8_t* clientMac, int8_
         net.clients[net.clientCount].lastSeen = millis();
         net.clientCount++;
         
-        Serial.printf("[OINK] Client tracked: %02X:%02X:%02X:%02X:%02X:%02X -> %s\n",
-                     clientMac[0], clientMac[1], clientMac[2],
-                     clientMac[3], clientMac[4], clientMac[5],
-                     net.ssid);
+        queueLog("[OINK] Client tracked: %02X:%02X:%02X:%02X:%02X:%02X -> %s",
+                 clientMac[0], clientMac[1], clientMac[2],
+                 clientMac[3], clientMac[4], clientMac[5],
+                 net.ssid);
     }
 }
 
