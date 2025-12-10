@@ -883,10 +883,11 @@ bool Display::takeScreenshot() {
     
     Serial.printf("[DISPLAY] Screenshot saved: %s (%lu bytes)\n", path, filesize);
     
-    // Show success toast
+    // Show success toast and hold for visibility
     char msg[32];
     snprintf(msg, sizeof(msg), "SNAP! #%d", num);
     showToast(msg);
+    delay(1000);  // Hold toast for 1 second so user sees it
     
     snapping = false;
     return true;
