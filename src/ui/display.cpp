@@ -61,9 +61,11 @@ void Display::update() {
     
     drawTopBar();
     
-    // Draw main content based on mode
+    // Draw main content based on mode - reset all canvas state
     mainCanvas.fillSprite(COLOR_BG);
     mainCanvas.setTextColor(COLOR_FG);
+    mainCanvas.setTextDatum(TL_DATUM);  // Reset to top-left (default)
+    mainCanvas.setFont(&fonts::Font0);  // Reset to default font
     
     PorkchopMode mode = porkchop.getMode();
     
