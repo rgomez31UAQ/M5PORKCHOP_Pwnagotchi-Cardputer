@@ -601,9 +601,19 @@ void Mood::onPiggyBluesUpdate(const char* vendor, int8_t rssi, uint8_t targetCou
     lastActivityTime = millis();
     happiness = min(100, happiness + 2);
     
-    // Award XP for BLE spam
-    if (vendor != nullptr && strcmp(vendor, "Apple") == 0) {
-        XP::addXP(XPEvent::BLE_APPLE);  // Bonus for Apple
+    // Award XP for BLE spam (vendor-specific tracking for achievements)
+    if (vendor != nullptr) {
+        if (strcmp(vendor, "Apple") == 0) {
+            XP::addXP(XPEvent::BLE_APPLE);
+        } else if (strcmp(vendor, "Android") == 0) {
+            XP::addXP(XPEvent::BLE_ANDROID);
+        } else if (strcmp(vendor, "Samsung") == 0) {
+            XP::addXP(XPEvent::BLE_SAMSUNG);
+        } else if (strcmp(vendor, "Windows") == 0) {
+            XP::addXP(XPEvent::BLE_WINDOWS);
+        } else {
+            XP::addXP(XPEvent::BLE_BURST);
+        }
     } else {
         XP::addXP(XPEvent::BLE_BURST);
     }

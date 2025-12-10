@@ -10,6 +10,7 @@ enum class XPEvent : uint8_t {
     NETWORK_HIDDEN,         // +5 XP
     NETWORK_WPA3,           // +10 XP
     NETWORK_OPEN,           // +3 XP
+    NETWORK_WEP,            // +5 XP (rare find!)
     HANDSHAKE_CAPTURED,     // +50 XP
     PMKID_CAPTURED,         // +75 XP
     DEAUTH_SENT,            // +2 XP
@@ -18,6 +19,9 @@ enum class XPEvent : uint8_t {
     DISTANCE_KM,            // +25 XP
     BLE_BURST,              // +1 XP
     BLE_APPLE,              // +3 XP
+    BLE_ANDROID,            // +2 XP
+    BLE_SAMSUNG,            // +2 XP
+    BLE_WINDOWS,            // +2 XP
     GPS_LOCK,               // +10 XP
     ML_ROGUE_DETECTED,      // +25 XP
     SESSION_30MIN,          // +50 XP
@@ -26,32 +30,78 @@ enum class XPEvent : uint8_t {
     LOW_BATTERY_CAPTURE     // +20 XP bonus
 };
 
-// Achievement bitflags
-enum PorkAchievement : uint32_t {
+// Achievement bitflags (uint64_t for 47 achievements)
+enum PorkAchievement : uint64_t {
     ACH_NONE            = 0,
-    ACH_FIRST_BLOOD     = 1 << 0,   // First handshake
-    ACH_CENTURION       = 1 << 1,   // 100 networks in one session
-    ACH_MARATHON_PIG    = 1 << 2,   // 10km walked
-    ACH_NIGHT_OWL       = 1 << 3,   // Session after midnight
-    ACH_GHOST_HUNTER    = 1 << 4,   // 10 hidden networks
-    ACH_APPLE_FARMER    = 1 << 5,   // 100 Apple BLE hits
-    ACH_WARDRIVER       = 1 << 6,   // 1000 lifetime networks
-    ACH_DEAUTH_KING     = 1 << 7,   // 100 successful deauths
-    ACH_PMKID_HUNTER    = 1 << 8,   // Capture PMKID
-    ACH_WPA3_SPOTTER    = 1 << 9,   // Find WPA3 network
-    ACH_GPS_MASTER      = 1 << 10,  // 100 GPS-tagged networks
-    ACH_TOUCH_GRASS     = 1 << 11,  // 50km total walked
-    ACH_SILICON_PSYCHO  = 1 << 12,  // 5000 lifetime networks
-    ACH_CLUTCH_CAPTURE  = 1 << 13,  // Handshake at <10% battery
-    ACH_SPEED_RUN       = 1 << 14,  // 50 networks in 10 minutes
-    ACH_CHAOS_AGENT     = 1 << 15,  // 1000 BLE packets sent
-    ACH_NIETZSWINE      = 1 << 16,  // Stare at spectrum for 15 minutes
+    // Original 17 achievements (bits 0-16)
+    ACH_FIRST_BLOOD     = 1ULL << 0,   // First handshake
+    ACH_CENTURION       = 1ULL << 1,   // 100 networks in one session
+    ACH_MARATHON_PIG    = 1ULL << 2,   // 10km walked in session
+    ACH_NIGHT_OWL       = 1ULL << 3,   // Session after midnight
+    ACH_GHOST_HUNTER    = 1ULL << 4,   // 10 hidden networks
+    ACH_APPLE_FARMER    = 1ULL << 5,   // 100 Apple BLE hits
+    ACH_WARDRIVER       = 1ULL << 6,   // 1000 lifetime networks
+    ACH_DEAUTH_KING     = 1ULL << 7,   // 100 successful deauths
+    ACH_PMKID_HUNTER    = 1ULL << 8,   // Capture PMKID
+    ACH_WPA3_SPOTTER    = 1ULL << 9,   // Find WPA3 network
+    ACH_GPS_MASTER      = 1ULL << 10,  // 100 GPS-tagged networks
+    ACH_TOUCH_GRASS     = 1ULL << 11,  // 50km total walked
+    ACH_SILICON_PSYCHO  = 1ULL << 12,  // 5000 lifetime networks
+    ACH_CLUTCH_CAPTURE  = 1ULL << 13,  // Handshake at <10% battery
+    ACH_SPEED_RUN       = 1ULL << 14,  // 50 networks in 10 minutes
+    ACH_CHAOS_AGENT     = 1ULL << 15,  // 1000 BLE packets sent
+    ACH_NIETZSWINE      = 1ULL << 16,  // Stare at spectrum for 15 minutes
+    
+    // New achievements (bits 17-46)
+    // Network milestones
+    ACH_TEN_THOUSAND    = 1ULL << 17,  // 10,000 networks lifetime
+    ACH_NEWB_SNIFFER    = 1ULL << 18,  // First 10 networks
+    ACH_FIVE_HUNDRED    = 1ULL << 19,  // 500 networks in session
+    ACH_OPEN_SEASON     = 1ULL << 20,  // 50 open networks
+    ACH_WEP_LOLZER      = 1ULL << 21,  // Find a WEP network
+    
+    // Handshake/PMKID milestones
+    ACH_HANDSHAKE_HAM   = 1ULL << 22,  // 10 handshakes lifetime
+    ACH_FIFTY_SHAKES    = 1ULL << 23,  // 50 handshakes lifetime
+    ACH_PMKID_FIEND     = 1ULL << 24,  // 10 PMKIDs captured
+    ACH_TRIPLE_THREAT   = 1ULL << 25,  // 3 handshakes in session
+    ACH_HOT_STREAK      = 1ULL << 26,  // 5 handshakes in session
+    
+    // Deauth milestones
+    ACH_FIRST_DEAUTH    = 1ULL << 27,  // First successful deauth
+    ACH_DEAUTH_THOUSAND = 1ULL << 28,  // 1000 successful deauths
+    ACH_RAMPAGE         = 1ULL << 29,  // 10 deauths in session
+    
+    // Distance/WARHOG milestones
+    ACH_HALF_MARATHON   = 1ULL << 30,  // 21km in session
+    ACH_HUNDRED_KM      = 1ULL << 31,  // 100km lifetime
+    ACH_GPS_ADDICT      = 1ULL << 32,  // 500 GPS-tagged networks
+    ACH_ULTRAMARATHON   = 1ULL << 33,  // 50km in session
+    
+    // BLE/PIGGYBLUES milestones
+    ACH_PARANOID_ANDROID = 1ULL << 34, // 100 Android FastPair spam
+    ACH_SAMSUNG_SPRAY   = 1ULL << 35,  // 100 Samsung spam
+    ACH_WINDOWS_PANIC   = 1ULL << 36,  // 100 Windows SwiftPair spam
+    ACH_BLE_BOMBER      = 1ULL << 37,  // 5000 BLE packets
+    ACH_OINKAGEDDON     = 1ULL << 38,  // 10000 BLE packets
+    
+    // Time/session milestones
+    ACH_SESSION_VET     = 1ULL << 39,  // 100 sessions
+    ACH_FOUR_HOUR_GRIND = 1ULL << 40,  // 4 hour session
+    ACH_EARLY_BIRD      = 1ULL << 41,  // Active 5-7am
+    ACH_WEEKEND_WARRIOR = 1ULL << 42,  // Session on weekend
+    
+    // Special/rare
+    ACH_ROGUE_SPOTTER   = 1ULL << 43,  // ML detects rogue AP
+    ACH_HIDDEN_MASTER   = 1ULL << 44,  // 50 hidden networks
+    ACH_WPA3_HUNTER     = 1ULL << 45,  // 25 WPA3 networks
+    ACH_MAX_LEVEL       = 1ULL << 46,  // Reach level 40
 };
 
 // Persistent XP data structure (stored in NVS)
 struct PorkXPData {
     uint32_t totalXP;           // Lifetime XP
-    uint32_t achievements;      // Achievement bitfield
+    uint64_t achievements;      // Achievement bitfield (expanded for 47 achievements)
     uint32_t lifetimeNetworks;  // Counter
     uint32_t lifetimeHS;        // Counter
     uint32_t lifetimePMKID;     // PMKID counter
@@ -61,8 +111,13 @@ struct PorkXPData {
     uint32_t hiddenNetworks;    // Hidden network count
     uint32_t wpa3Networks;      // WPA3 network count
     uint32_t gpsNetworks;       // GPS-tagged networks
+    uint32_t openNetworks;      // Open network count (new)
+    uint32_t androidBLE;        // Android FastPair count (new)
+    uint32_t samsungBLE;        // Samsung BLE count (new)
+    uint32_t windowsBLE;        // Windows SwiftPair count (new)
     uint16_t sessions;          // Session count
     uint8_t  cachedLevel;       // Cached level for quick access
+    bool     wepFound;          // WEP network ever found (new)
 };
 
 // Session-only stats (not persisted)
@@ -80,6 +135,10 @@ struct SessionStats {
     bool session60Awarded;
     bool session120Awarded;
     bool nightOwlAwarded;       // Hunt after midnight
+    bool session240Awarded;     // 4 hour session (new)
+    bool earlyBirdAwarded;      // 5-7am session (new)
+    bool weekendWarriorAwarded; // Weekend session (new)
+    bool rogueSpotterAwarded;   // ML rogue detected (new)
 };
 
 class XP {
@@ -103,7 +162,7 @@ public:
     // Achievements
     static void unlockAchievement(PorkAchievement ach);
     static bool hasAchievement(PorkAchievement ach);
-    static uint32_t getAchievements();
+    static uint64_t getAchievements();
     static const char* getAchievementName(PorkAchievement ach);
     
     // Stats access

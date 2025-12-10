@@ -18,6 +18,7 @@ static const struct {
     const char* name;
     const char* howTo;
 } ACHIEVEMENTS[] = {
+    // Original 17 achievements
     { ACH_FIRST_BLOOD,    "FIRST BLOOD",    "Capture your first handshake" },
     { ACH_CENTURION,      "CENTURION",      "Find 100 networks in one session" },
     { ACH_MARATHON_PIG,   "MARATHON PIG",   "Walk 10km in a single session" },
@@ -35,6 +36,37 @@ static const struct {
     { ACH_SPEED_RUN,      "SPEED RUN",      "50 networks in 10 minutes" },
     { ACH_CHAOS_AGENT,    "CHAOS AGENT",    "Send 1000 BLE packets" },
     { ACH_NIETZSWINE,     "N13TZSCH3",      "Stare into the ether long enough" },
+    // New 30 achievements
+    { ACH_TEN_THOUSAND,   "T3N THOU$AND",   "Log 10,000 networks lifetime" },
+    { ACH_NEWB_SNIFFER,   "N3WB SNIFFER",   "Find your first 10 networks" },
+    { ACH_FIVE_HUNDRED,   "500 P1GS",       "Find 500 networks in one session" },
+    { ACH_OPEN_SEASON,    "OPEN S3ASON",    "Find 50 open networks" },
+    { ACH_WEP_LOLZER,     "WEP L0LZER",     "Find a WEP network (ancient relic)" },
+    { ACH_HANDSHAKE_HAM,  "HANDSHAK3 HAM",  "Capture 10 handshakes lifetime" },
+    { ACH_FIFTY_SHAKES,   "F1FTY SHAKES",   "Capture 50 handshakes lifetime" },
+    { ACH_PMKID_FIEND,    "PMK1D F1END",    "Capture 10 PMKIDs" },
+    { ACH_TRIPLE_THREAT,  "TR1PLE THREAT",  "Capture 3 handshakes in one session" },
+    { ACH_HOT_STREAK,     "H0T STREAK",     "Capture 5 handshakes in one session" },
+    { ACH_FIRST_DEAUTH,   "F1RST BL00D",    "Your first successful deauth" },
+    { ACH_DEAUTH_THOUSAND,"DEAUTH TH0USAND","Land 1000 successful deauths" },
+    { ACH_RAMPAGE,        "RAMPAGE",        "10 deauths in one session" },
+    { ACH_HALF_MARATHON,  "HALF MARAT0N",   "Walk 21km in a single session" },
+    { ACH_HUNDRED_KM,     "HUNDRED K1L0",   "Walk 100km total lifetime" },
+    { ACH_GPS_ADDICT,     "GPS ADDICT",     "Log 500 GPS-tagged networks" },
+    { ACH_ULTRAMARATHON,  "ULTRAMAR4THON",  "Walk 50km in a single session" },
+    { ACH_PARANOID_ANDROID,"PARANOID ANDR01D","Send 100 Android FastPair spam" },
+    { ACH_SAMSUNG_SPRAY,  "SAMSUNG SPR4Y",  "Send 100 Samsung BLE spam" },
+    { ACH_WINDOWS_PANIC,  "W1ND0WS PANIC",  "Send 100 Windows SwiftPair spam" },
+    { ACH_BLE_BOMBER,     "BLE B0MBER",     "Send 5000 BLE packets" },
+    { ACH_OINKAGEDDON,    "OINK4GEDDON",    "Send 10000 BLE packets" },
+    { ACH_SESSION_VET,    "SESS10N V3T",    "Complete 100 sessions" },
+    { ACH_FOUR_HOUR_GRIND,"4 HOUR GR1ND",   "4 hour continuous session" },
+    { ACH_EARLY_BIRD,     "EARLY B1RD",     "Hunt between 5-7am" },
+    { ACH_WEEKEND_WARRIOR,"W33KEND WARR10R","Hunt on a weekend" },
+    { ACH_ROGUE_SPOTTER,  "R0GUE SP0TTER",  "ML detects a rogue AP" },
+    { ACH_HIDDEN_MASTER,  "H1DDEN MASTER",  "Find 50 hidden networks" },
+    { ACH_WPA3_HUNTER,    "WPA3 HUNT3R",    "Find 25 WPA3 networks" },
+    { ACH_MAX_LEVEL,      "MAX L3VEL",      "Reach level 40" },
 };
 
 void AchievementsMenu::init() {

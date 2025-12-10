@@ -560,16 +560,24 @@ void WarhogMode::processScanResults() {
             entries.push_back(entry);
             totalNetworks++;
             
-            // Track auth types
+            // Track auth types and award appropriate XP
             switch (entry.authmode) {
                 case WIFI_AUTH_OPEN:
                     openNetworks++;
+                    XP::addXP(XPEvent::NETWORK_OPEN);
                     break;
                 case WIFI_AUTH_WEP:
                     wepNetworks++;
+                    XP::addXP(XPEvent::NETWORK_WEP);  // Rare find!
+                    break;
+                case WIFI_AUTH_WPA3_PSK:
+                case WIFI_AUTH_WPA2_WPA3_PSK:
+                    wpaNetworks++;
+                    XP::addXP(XPEvent::NETWORK_WPA3);
                     break;
                 default:
                     wpaNetworks++;
+                    XP::addXP(XPEvent::NETWORK_FOUND);
                     break;
             }
             

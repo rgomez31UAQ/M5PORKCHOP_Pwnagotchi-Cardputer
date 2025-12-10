@@ -17,6 +17,7 @@ static const uint16_t XP_VALUES[] = {
     3,      // NETWORK_HIDDEN (was 5, doc says 3)
     10,     // NETWORK_WPA3
     3,      // NETWORK_OPEN
+    5,      // NETWORK_WEP (rare find!)
     50,     // HANDSHAKE_CAPTURED
     75,     // PMKID_CAPTURED
     2,      // DEAUTH_SENT
@@ -25,6 +26,9 @@ static const uint16_t XP_VALUES[] = {
     25,     // DISTANCE_KM
     2,      // BLE_BURST (was 1, doc says 2)
     3,      // BLE_APPLE
+    2,      // BLE_ANDROID
+    2,      // BLE_SAMSUNG
+    2,      // BLE_WINDOWS
     5,      // GPS_LOCK (was 10, doc says 5)
     25,     // ML_ROGUE_DETECTED
     10,     // SESSION_30MIN (was 50, doc says 10)
@@ -86,8 +90,9 @@ static const char* RANK_TITLES[] = {
 };
 static const uint8_t MAX_LEVEL = 40;
 
-// Achievement names
+// Achievement names (must match enum order)
 static const char* ACHIEVEMENT_NAMES[] = {
+    // Original 17 (bits 0-16)
     "FIRST BLOOD",
     "CENTURION",
     "MARATHON PIG",
@@ -104,8 +109,40 @@ static const char* ACHIEVEMENT_NAMES[] = {
     "CLUTCH CAPTURE",
     "SPEED RUN",
     "CHAOS AGENT",
-    "N13TZSCH3"
+    "N13TZSCH3",
+    // New achievements (bits 17-46)
+    "T3N THOU$AND",
+    "N3WB SNIFFER",
+    "500 P1GS",
+    "OPEN S3ASON",
+    "WEP L0LZER",
+    "HANDSHAK3 HAM",
+    "F1FTY SHAKES",
+    "PMK1D F1END",
+    "TR1PLE THREAT",
+    "H0T STREAK",
+    "F1RST BL00D",
+    "DEAUTH TH0USAND",
+    "RAMPAGE",
+    "HALF MARAT0N",
+    "HUNDRED K1L0",
+    "GPS ADDICT",
+    "ULTRAMAR4THON",
+    "PARANOID ANDR01D",
+    "SAMSUNG SPR4Y",
+    "W1ND0WS PANIC",
+    "BLE B0MBER",
+    "OINK4GEDDON",
+    "SESS10N V3T",
+    "4 HOUR GR1ND",
+    "EARLY B1RD",
+    "W33KEND WARR10R",
+    "R0GUE SP0TTER",
+    "H1DDEN MASTER",
+    "WPA3 HUNT3R",
+    "MAX L3VEL"
 };
+static const uint8_t ACHIEVEMENT_COUNT = sizeof(ACHIEVEMENT_NAMES) / sizeof(ACHIEVEMENT_NAMES[0]);
 
 // Level up phrases
 static const char* LEVELUP_PHRASES[] = {
@@ -137,7 +174,10 @@ void XP::load() {
     prefs.begin("porkxp", true);  // Read-only
     
     data.totalXP = prefs.getUInt("totalxp", 0);
-    data.achievements = prefs.getUInt("achieve", 0);
+    // Read achievements as two 32-bit values for uint64_t
+    uint32_t achLow = prefs.getUInt("achieve", 0);
+    uint32_t achHigh = prefs.getUInt("achievehi", 0);
+    data.achievements = ((uint64_t)achHigh << 32) | achLow;
     data.lifetimeNetworks = prefs.getUInt("networks", 0);
     data.lifetimeHS = prefs.getUInt("hs", 0);
     data.lifetimePMKID = prefs.getUInt("pmkid", 0);
@@ -147,7 +187,12 @@ void XP::load() {
     data.hiddenNetworks = prefs.getUInt("hidden", 0);
     data.wpa3Networks = prefs.getUInt("wpa3", 0);
     data.gpsNetworks = prefs.getUInt("gpsnet", 0);
+    data.openNetworks = prefs.getUInt("open", 0);
+    data.androidBLE = prefs.getUInt("android", 0);
+    data.samsungBLE = prefs.getUInt("samsung", 0);
+    data.windowsBLE = prefs.getUInt("windows", 0);
     data.sessions = prefs.getUShort("sessions", 0);
+    data.wepFound = prefs.getBool("wep", false);
     data.cachedLevel = calculateLevel(data.totalXP);
     
     prefs.end();
@@ -157,7 +202,9 @@ void XP::save() {
     prefs.begin("porkxp", false);  // Read-write
     
     prefs.putUInt("totalxp", data.totalXP);
-    prefs.putUInt("achieve", data.achievements);
+    // Store achievements as two 32-bit values for uint64_t
+    prefs.putUInt("achieve", (uint32_t)(data.achievements & 0xFFFFFFFF));
+    prefs.putUInt("achievehi", (uint32_t)(data.achievements >> 32));
     prefs.putUInt("networks", data.lifetimeNetworks);
     prefs.putUInt("hs", data.lifetimeHS);
     prefs.putUInt("pmkid", data.lifetimePMKID);
@@ -167,7 +214,12 @@ void XP::save() {
     prefs.putUInt("hidden", data.hiddenNetworks);
     prefs.putUInt("wpa3", data.wpa3Networks);
     prefs.putUInt("gpsnet", data.gpsNetworks);
+    prefs.putUInt("open", data.openNetworks);
+    prefs.putUInt("android", data.androidBLE);
+    prefs.putUInt("samsung", data.samsungBLE);
+    prefs.putUInt("windows", data.windowsBLE);
     prefs.putUShort("sessions", data.sessions);
+    prefs.putBool("wep", data.wepFound);
     
     prefs.end();
     
@@ -195,8 +247,13 @@ void XP::addXP(XPEvent event) {
     // Track lifetime stats based on event type
     switch (event) {
         case XPEvent::NETWORK_FOUND:
+            data.lifetimeNetworks++;
+            session.networks++;
+            if (session.firstNetworkTime == 0) session.firstNetworkTime = millis();
+            break;
         case XPEvent::NETWORK_OPEN:
             data.lifetimeNetworks++;
+            data.openNetworks++;  // Track open networks
             session.networks++;
             if (session.firstNetworkTime == 0) session.firstNetworkTime = millis();
             break;
@@ -209,6 +266,12 @@ void XP::addXP(XPEvent event) {
         case XPEvent::NETWORK_WPA3:
             data.lifetimeNetworks++;
             data.wpa3Networks++;
+            session.networks++;
+            if (session.firstNetworkTime == 0) session.firstNetworkTime = millis();
+            break;
+        case XPEvent::NETWORK_WEP:
+            data.lifetimeNetworks++;
+            data.wepFound = true;  // Track WEP found (ancient relic!)
             session.networks++;
             if (session.firstNetworkTime == 0) session.firstNetworkTime = millis();
             break;
@@ -240,12 +303,37 @@ void XP::addXP(XPEvent event) {
             data.gpsNetworks++;
             break;
         case XPEvent::BLE_BURST:
+            data.lifetimeBLE++;
+            session.blePackets++;
+            break;
         case XPEvent::BLE_APPLE:
             data.lifetimeBLE++;
             session.blePackets++;
             break;
+        case XPEvent::BLE_ANDROID:
+            data.lifetimeBLE++;
+            data.androidBLE++;
+            session.blePackets++;
+            break;
+        case XPEvent::BLE_SAMSUNG:
+            data.lifetimeBLE++;
+            data.samsungBLE++;
+            session.blePackets++;
+            break;
+        case XPEvent::BLE_WINDOWS:
+            data.lifetimeBLE++;
+            data.windowsBLE++;
+            session.blePackets++;
+            break;
         case XPEvent::GPS_LOCK:
             session.gpsLockAwarded = true;
+            break;
+        case XPEvent::ML_ROGUE_DETECTED:
+            // Rogue AP detected by ML - unlock achievement
+            if (!session.rogueSpotterAwarded && !hasAchievement(ACH_ROGUE_SPOTTER)) {
+                unlockAchievement(ACH_ROGUE_SPOTTER);
+                session.rogueSpotterAwarded = true;
+            }
             break;
         default:
             break;
@@ -420,10 +508,10 @@ void XP::unlockAchievement(PorkAchievement ach) {
     
     data.achievements |= ach;
     
-    // Find achievement index for name lookup
+    // Find achievement index for name lookup (count trailing zeros)
     uint8_t idx = 0;
-    uint32_t mask = 1;
-    while (mask < (uint32_t)ach && idx < 16) {
+    uint64_t mask = 1ULL;
+    while (mask < (uint64_t)ach && idx < ACHIEVEMENT_COUNT - 1) {
         mask <<= 1;
         idx++;
     }
@@ -437,14 +525,14 @@ bool XP::hasAchievement(PorkAchievement ach) {
     return (data.achievements & ach) != 0;
 }
 
-uint32_t XP::getAchievements() {
+uint64_t XP::getAchievements() {
     return data.achievements;
 }
 
 const char* XP::getAchievementName(PorkAchievement ach) {
     uint8_t idx = 0;
-    uint32_t mask = 1;
-    while (mask < (uint32_t)ach && idx < 16) {
+    uint64_t mask = 1ULL;
+    while (mask < (uint64_t)ach && idx < ACHIEVEMENT_COUNT - 1) {
         mask <<= 1;
         idx++;
     }
@@ -452,6 +540,8 @@ const char* XP::getAchievementName(PorkAchievement ach) {
 }
 
 void XP::checkAchievements() {
+    // ===== ORIGINAL 17 ACHIEVEMENTS =====
+    
     // First handshake
     if (data.lifetimeHS >= 1 && !hasAchievement(ACH_FIRST_BLOOD)) {
         unlockAchievement(ACH_FIRST_BLOOD);
@@ -536,6 +626,181 @@ void XP::checkAchievements() {
                 session.nightOwlAwarded = true;
             }
         }
+    }
+    
+    // ===== NEW 30 ACHIEVEMENTS =====
+    
+    // --- Network milestones ---
+    // 10,000 networks lifetime
+    if (data.lifetimeNetworks >= 10000 && !hasAchievement(ACH_TEN_THOUSAND)) {
+        unlockAchievement(ACH_TEN_THOUSAND);
+    }
+    
+    // First 10 networks
+    if (data.lifetimeNetworks >= 10 && !hasAchievement(ACH_NEWB_SNIFFER)) {
+        unlockAchievement(ACH_NEWB_SNIFFER);
+    }
+    
+    // 500 networks in session
+    if (session.networks >= 500 && !hasAchievement(ACH_FIVE_HUNDRED)) {
+        unlockAchievement(ACH_FIVE_HUNDRED);
+    }
+    
+    // 50 open networks
+    if (data.openNetworks >= 50 && !hasAchievement(ACH_OPEN_SEASON)) {
+        unlockAchievement(ACH_OPEN_SEASON);
+    }
+    
+    // WEP network found
+    if (data.wepFound && !hasAchievement(ACH_WEP_LOLZER)) {
+        unlockAchievement(ACH_WEP_LOLZER);
+    }
+    
+    // --- Handshake/PMKID milestones ---
+    // 10 handshakes lifetime
+    if (data.lifetimeHS >= 10 && !hasAchievement(ACH_HANDSHAKE_HAM)) {
+        unlockAchievement(ACH_HANDSHAKE_HAM);
+    }
+    
+    // 50 handshakes lifetime
+    if (data.lifetimeHS >= 50 && !hasAchievement(ACH_FIFTY_SHAKES)) {
+        unlockAchievement(ACH_FIFTY_SHAKES);
+    }
+    
+    // 10 PMKIDs captured
+    if (data.lifetimePMKID >= 10 && !hasAchievement(ACH_PMKID_FIEND)) {
+        unlockAchievement(ACH_PMKID_FIEND);
+    }
+    
+    // 3 handshakes in session
+    if (session.handshakes >= 3 && !hasAchievement(ACH_TRIPLE_THREAT)) {
+        unlockAchievement(ACH_TRIPLE_THREAT);
+    }
+    
+    // 5 handshakes in session
+    if (session.handshakes >= 5 && !hasAchievement(ACH_HOT_STREAK)) {
+        unlockAchievement(ACH_HOT_STREAK);
+    }
+    
+    // --- Deauth milestones ---
+    // First deauth
+    if (data.lifetimeDeauths >= 1 && !hasAchievement(ACH_FIRST_DEAUTH)) {
+        unlockAchievement(ACH_FIRST_DEAUTH);
+    }
+    
+    // 1000 deauths
+    if (data.lifetimeDeauths >= 1000 && !hasAchievement(ACH_DEAUTH_THOUSAND)) {
+        unlockAchievement(ACH_DEAUTH_THOUSAND);
+    }
+    
+    // 10 deauths in session
+    if (session.deauths >= 10 && !hasAchievement(ACH_RAMPAGE)) {
+        unlockAchievement(ACH_RAMPAGE);
+    }
+    
+    // --- Distance/WARHOG milestones ---
+    // 21km in session (half marathon)
+    if (session.distanceM >= 21000 && !hasAchievement(ACH_HALF_MARATHON)) {
+        unlockAchievement(ACH_HALF_MARATHON);
+    }
+    
+    // 100km lifetime
+    if (data.lifetimeDistance >= 100000 && !hasAchievement(ACH_HUNDRED_KM)) {
+        unlockAchievement(ACH_HUNDRED_KM);
+    }
+    
+    // 500 GPS-tagged networks
+    if (data.gpsNetworks >= 500 && !hasAchievement(ACH_GPS_ADDICT)) {
+        unlockAchievement(ACH_GPS_ADDICT);
+    }
+    
+    // 50km in session (ultramarathon)
+    if (session.distanceM >= 50000 && !hasAchievement(ACH_ULTRAMARATHON)) {
+        unlockAchievement(ACH_ULTRAMARATHON);
+    }
+    
+    // --- BLE/PIGGYBLUES milestones ---
+    // 100 Android FastPair spam
+    if (data.androidBLE >= 100 && !hasAchievement(ACH_PARANOID_ANDROID)) {
+        unlockAchievement(ACH_PARANOID_ANDROID);
+    }
+    
+    // 100 Samsung spam
+    if (data.samsungBLE >= 100 && !hasAchievement(ACH_SAMSUNG_SPRAY)) {
+        unlockAchievement(ACH_SAMSUNG_SPRAY);
+    }
+    
+    // 100 Windows SwiftPair spam
+    if (data.windowsBLE >= 100 && !hasAchievement(ACH_WINDOWS_PANIC)) {
+        unlockAchievement(ACH_WINDOWS_PANIC);
+    }
+    
+    // 5000 BLE packets
+    if (data.lifetimeBLE >= 5000 && !hasAchievement(ACH_BLE_BOMBER)) {
+        unlockAchievement(ACH_BLE_BOMBER);
+    }
+    
+    // 10000 BLE packets
+    if (data.lifetimeBLE >= 10000 && !hasAchievement(ACH_OINKAGEDDON)) {
+        unlockAchievement(ACH_OINKAGEDDON);
+    }
+    
+    // --- Time/session milestones ---
+    // 100 sessions
+    if (data.sessions >= 100 && !hasAchievement(ACH_SESSION_VET)) {
+        unlockAchievement(ACH_SESSION_VET);
+    }
+    
+    // 4 hour session (240 minutes = 14400000ms)
+    if (!session.session240Awarded && !hasAchievement(ACH_FOUR_HOUR_GRIND)) {
+        uint32_t sessionMinutes = (millis() - session.startTime) / 60000;
+        if (sessionMinutes >= 240) {
+            unlockAchievement(ACH_FOUR_HOUR_GRIND);
+            session.session240Awarded = true;
+        }
+    }
+    
+    // Early bird (5-7am)
+    if (!session.earlyBirdAwarded && !hasAchievement(ACH_EARLY_BIRD)) {
+        time_t now = time(nullptr);
+        if (now > 1700000000) {
+            struct tm* timeinfo = localtime(&now);
+            if (timeinfo && timeinfo->tm_hour >= 5 && timeinfo->tm_hour < 7) {
+                unlockAchievement(ACH_EARLY_BIRD);
+                session.earlyBirdAwarded = true;
+            }
+        }
+    }
+    
+    // Weekend warrior (Saturday or Sunday)
+    if (!session.weekendWarriorAwarded && !hasAchievement(ACH_WEEKEND_WARRIOR)) {
+        time_t now = time(nullptr);
+        if (now > 1700000000) {
+            struct tm* timeinfo = localtime(&now);
+            if (timeinfo && (timeinfo->tm_wday == 0 || timeinfo->tm_wday == 6)) {
+                unlockAchievement(ACH_WEEKEND_WARRIOR);
+                session.weekendWarriorAwarded = true;
+            }
+        }
+    }
+    
+    // --- Special/rare ---
+    // Rogue spotter is checked when ML_ROGUE_DETECTED event fires
+    // (handled separately in addXP for ML events)
+    
+    // 50 hidden networks
+    if (data.hiddenNetworks >= 50 && !hasAchievement(ACH_HIDDEN_MASTER)) {
+        unlockAchievement(ACH_HIDDEN_MASTER);
+    }
+    
+    // 25 WPA3 networks
+    if (data.wpa3Networks >= 25 && !hasAchievement(ACH_WPA3_HUNTER)) {
+        unlockAchievement(ACH_WPA3_HUNTER);
+    }
+    
+    // Max level reached
+    if (data.cachedLevel >= 40 && !hasAchievement(ACH_MAX_LEVEL)) {
+        unlockAchievement(ACH_MAX_LEVEL);
     }
 }
 
