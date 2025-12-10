@@ -6,6 +6,7 @@ M5Porkchop is a WiFi security research tool for the M5Cardputer (ESP32-S3 based)
 - **OINK Mode**: WiFi scanning, handshake capture, PMKID capture, deauth attacks
 - **WARHOG Mode**: Wardriving with GPS logging
 - **PIGGYBLUES Mode**: BLE notification spam (AppleJuice, FastPair, Samsung, SwiftPair)
+- **HOG ON SPECTRUM Mode**: Real-time WiFi spectrum analyzer with Gaussian lobes
 - **RPG XP System**: Level up from BACON N00B to MUDGE UNCHA1NED (40 ranks)
 - Interactive ASCII piglet avatar with mood-based phrases
 - Settings menu with persistent configuration
@@ -45,6 +46,7 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
 - `src/modes/oink.cpp/h` - OinkMode: WiFi scanning, channel hopping, promiscuous mode, handshake capture
 - `src/modes/warhog.cpp/h` - WarhogMode: GPS-enabled wardriving, multiple export formats (CSV, Wigle, Kismet, ML Training)
 - `src/modes/piggyblues.cpp/h` - PiggyBluesMode: BLE notification spam targeting Apple/Android/Samsung/Windows devices
+- `src/modes/spectrum.cpp/h` - SpectrumMode: Real-time WiFi spectrum analyzer with Gaussian lobes, channel hopping
 
 ### UI Layer
 - `src/ui/display.cpp/h` - Triple-buffered canvas system (topBar, mainCanvas, bottomBar), 240x135 display, showToast(), showLevelUp()
@@ -97,20 +99,21 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
 - **`.`** - Next/Down/Increase value
 - **Enter** - Select/Toggle/Confirm
 - **Backtick (`)** - Open menu / Exit to previous mode
-- **O/W/B/S** - Quick mode shortcuts from IDLE (Oink/Warhog/piggyBlues/Settings)
+- **O/W/B/H/S** - Quick mode shortcuts from IDLE (Oink/Warhog/piggyBlues/Hog on spectrum/Settings)
+- **Backspace** - Stop current mode and return to IDLE
 - **G0 button** - Physical button on top, returns to IDLE from any mode (uses GPIO0 direct read)
 
 ## Mode State Machine
 
 ```
 PorkchopMode:
-  IDLE -> OINK_MODE | WARHOG_MODE | PIGGYBLUES_MODE | MENU | SETTINGS | CAPTURES | ACHIEVEMENTS | ABOUT | FILE_TRANSFER | LOG_VIEWER
+  IDLE -> OINK_MODE | WARHOG_MODE | PIGGYBLUES_MODE | SPECTRUM_MODE | MENU | SETTINGS | CAPTURES | ACHIEVEMENTS | ABOUT | FILE_TRANSFER | LOG_VIEWER
   MENU -> (any mode via menu selection)
   SETTINGS/CAPTURES/ACHIEVEMENTS/ABOUT/FILE_TRANSFER/LOG_VIEWER -> MENU (via Enter or backtick)
   G0 button -> IDLE (from any mode)
 ```
 
-**Important**: `previousMode` only stores "real" modes (IDLE, OINK_MODE, WARHOG_MODE, PIGGYBLUES_MODE), never MENU/SETTINGS/ACHIEVEMENTS/ABOUT, to prevent navigation loops.
+**Important**: `previousMode` only stores "real" modes (IDLE, OINK_MODE, WARHOG_MODE, PIGGYBLUES_MODE, SPECTRUM_MODE), never MENU/SETTINGS/ACHIEVEMENTS/ABOUT, to prevent navigation loops.
 
 ## Phrase System
 
@@ -235,6 +238,41 @@ BLE notification spam mode that sends crafted advertisements to trigger notifica
 - Warning dialog on first start (user must confirm)
 - BLE stack recovery on advertising failures
 - Proper NimBLE deinit on stop
+
+## HOG ON SPECTRUM Mode Details
+
+### Overview
+Real-time WiFi spectrum analyzer that visualizes 2.4GHz band activity with Gaussian lobes representing actual 802.11b/g channel width spreading.
+
+### Display Layout
+- **y=0-75**: Spectrum area with RSSI scale (-95 to -30 dBm)
+- **y=78**: Channel markers (1-13)
+- **y=91**: XP bar (shared with other modes)
+
+### Visualization
+- Gaussian lobes with sigma ~6.6 pixels (22MHz channel width)
+- Lobe height based on RSSI - stronger signal = taller peak
+- Color-coded by encryption:
+  - **Green**: WPA2/WPA3
+  - **Yellow**: WPA/WPA1
+  - **Red**: Open/WEP
+- Stale networks fade after 5 seconds
+
+### Channel Hopping
+- 100ms per channel = ~1.3s full sweep across channels 1-13
+- Uses promiscuous mode for beacon capture
+- Same `busy` guard pattern as OINK/WARHOG for thread safety
+
+### Controls
+- **`;`** - Scroll left (lower channels)
+- **`.`** - Scroll right (higher channels)
+- **Enter** - Cycle through discovered networks, centers view on selection
+- **Backspace/G0** - Exit mode
+
+### Achievement
+- **N13TZSCH3**: Stare at spectrum for 15 minutes straight
+  - Toast: "the ether deauths back"
+  - Tracks `startTime` in mode, checks elapsed time in `update()`
 
 ## ML System
 
@@ -525,8 +563,8 @@ L19: TRUFFLE R00T        L39: PHIBER 0PT1K
 L20: INJECT P1G          L40: MUDGE UNCHA1NED
 ```
 
-### Achievements (16 Bitflags)
-16 secret badges stored in `data.achievements` bitfield. Viewable via Achievements menu.
+### Achievements (17 Bitflags)
+17 secret badges stored in `data.achievements` bitfield. Viewable via Achievements menu.
 
 ```cpp
 ACH_FIRST_BLOOD     = 1 << 0   // First handshake
@@ -537,7 +575,7 @@ ACH_GHOST_HUNTER    = 1 << 4   // 10 hidden networks
 ACH_APPLE_FARMER    = 1 << 5   // 100 Apple BLE packets
 ACH_WARDRIVER       = 1 << 6   // 1000 networks lifetime
 ACH_DEAUTH_KING     = 1 << 7   // 100 successful deauths
-ACH_PMKID_HUNTER    = 1 << 8   // Capture PMKID (not implemented yet)
+ACH_PMKID_HUNTER    = 1 << 8   // Capture PMKID
 ACH_WPA3_SPOTTER    = 1 << 9   // Find WPA3 network
 ACH_GPS_MASTER      = 1 << 10  // 100 GPS-tagged networks
 ACH_TOUCH_GRASS     = 1 << 11  // 50km total lifetime
@@ -545,12 +583,13 @@ ACH_SILICON_PSYCHO  = 1 << 12  // 5000 networks lifetime
 ACH_CLUTCH_CAPTURE  = 1 << 13  // Handshake at <10% battery
 ACH_SPEED_RUN       = 1 << 14  // 50 networks in 10 minutes
 ACH_CHAOS_AGENT     = 1 << 15  // 1000 BLE packets
+ACH_NIETZSWINE      = 1 << 16  // Stare at spectrum for 15 minutes
 ```
 
 ### Achievements Menu
-`src/ui/achievements_menu.cpp/h` - Accessible from main menu ("Proof of pwn").
+`src/ui/achievements_menu.cpp/h` - Accessible from main menu ("ACHIEVEMENTS").
 
-- Shows all 16 achievements with `[X]` unlocked / `[ ]` locked
+- Shows all 17 achievements with `[X]` unlocked / `[ ]` locked
 - Locked achievements show `???` for name (no spoilers)
 - Bottom bar shows unlock description for selected achievement, or "UNKNOWN" if locked
 - Enter key shows toast-style detail popup (pink bg, black text)
