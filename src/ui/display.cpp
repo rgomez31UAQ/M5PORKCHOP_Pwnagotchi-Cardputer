@@ -5,6 +5,7 @@
 #include "../core/porkchop.h"
 #include "../core/config.h"
 #include "../core/xp.h"
+#include "../build_info.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
@@ -640,17 +641,33 @@ void Display::drawAboutScreen(M5Canvas& canvas) {
     canvas.setTextColor(COLOR_FG);
     canvas.setTextDatum(top_center);
     
+    // Title
     canvas.setTextSize(2);
     canvas.setTextColor(COLOR_ACCENT);
-    canvas.drawString("M5PORKCHOP", DISPLAY_W / 2, 10);
+    canvas.drawString("M5PORKCHOP", DISPLAY_W / 2, 5);
     
+    // Version
     canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_FG);
-    canvas.drawString("by 0ct0", DISPLAY_W / 2, 35);
+    canvas.drawString("v" BUILD_VERSION, DISPLAY_W / 2, 25);
     
-    canvas.setTextColor(COLOR_SUCCESS);
-    canvas.drawString("github.com/neledov", DISPLAY_W / 2, 52);
-    canvas.drawString("/M5Porkchop", DISPLAY_W / 2, 64);
+    // Author
+    canvas.setTextColor(COLOR_FG);
+    canvas.drawString("by 0ct0", DISPLAY_W / 2, 38);
+    
+    // GitHub (single line)
+    canvas.drawString("github.com/neledov/M5Porkchop", DISPLAY_W / 2, 50);
+    
+    // XP stats - show level and rank
+    canvas.setTextColor(COLOR_ACCENT);
+    char lvlBuf[40];
+    snprintf(lvlBuf, sizeof(lvlBuf), "LVL %d - %s", XP::getLevel(), XP::getTitle());
+    canvas.drawString(lvlBuf, DISPLAY_W / 2, 66);
+    
+    // Total XP
+    canvas.setTextColor(COLOR_FG);
+    char xpBuf[24];
+    snprintf(xpBuf, sizeof(xpBuf), "XP: %lu", XP::getTotalXP());
+    canvas.drawString(xpBuf, DISPLAY_W / 2, 78);
     
     canvas.setTextColor(COLOR_ACCENT);
     canvas.drawString("[Enter] to go back", DISPLAY_W / 2, MAIN_H - 12);
