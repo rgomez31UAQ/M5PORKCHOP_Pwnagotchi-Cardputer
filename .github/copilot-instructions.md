@@ -155,7 +155,40 @@ pio run -t upload              # Build and upload
 pio run -t upload -e m5cardputer  # Upload release only
 ```
 
-## Common Patterns
+## Testing
+
+### Unit Tests (CI)
+Tests run automatically on GitHub Actions for every push to `main` or `develop` and every PR to `main`. The test suite uses Unity framework on the `native` platform (not ESP32).
+
+```powershell
+pio test -e native             # Run all tests locally (requires gcc)
+pio test -e native_coverage    # Run with coverage report
+```
+
+**Test directory structure** - Each test lives in its own subdirectory to ensure separate compilation:
+```
+test/
+  test_beacon/test_beacon_parsing.cpp    # 802.11 beacon frame parsing
+  test_classifier/test_heuristic_classifier.cpp  # ML anomaly scoring
+  test_distance/test_distance.cpp        # Haversine GPS distance
+  test_features/test_feature_extraction.cpp  # ML feature helpers
+  test_xp/test_xp_levels.cpp             # XP/leveling system
+  mocks/                                 # Shared mock headers
+```
+
+**Adding new tests:**
+1. Create subdirectory: `test/test_newmodule/`
+2. Create test file: `test/test_newmodule/test_newmodule.cpp`
+3. Include mocks with relative path: `#include "../mocks/testable_functions.h"`
+4. Define `setUp()`, `tearDown()`, `main()` with `UNITY_BEGIN()`/`UNITY_END()`
+5. Add testable functions to `test/mocks/testable_functions.h`
+
+### Hardware Testing
+For features that can't be unit tested:
+1. Verify mode transitions
+2. Check phrase display in each mode
+3. Confirm settings save/load across reboots
+4. Test GPS lock and wardriving CSV export
 
 ### Adding a new phrase category
 ```cpp
@@ -200,14 +233,6 @@ case PorkchopMode::NEW_MODE:
 - **GPS**: Connected via UART (pins configurable in GPSConfig)
 - **SD Card**: For handshake/wardriving data export
 - **WiFi**: ESP32 native, promiscuous mode for packet capture
-
-## Testing
-
-No automated tests currently. Test on hardware:
-1. Verify mode transitions
-2. Check phrase display in each mode
-3. Confirm settings save/load across reboots
-4. Test GPS lock and wardriving CSV export
 
 ## PIGGYBLUES Mode Details
 
