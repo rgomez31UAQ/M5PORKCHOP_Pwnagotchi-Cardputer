@@ -11,6 +11,7 @@ enum class PorkchopMode : uint8_t {
     OINK_MODE,      // Deauth + sniff mode
     WARHOG_MODE,    // Wardriving mode
     PIGGYBLUES_MODE,// BLE notification spam
+    SPECTRUM_MODE,  // WiFi spectrum analyzer
     MENU,           // Menu navigation
     SETTINGS,       // Settings screen
     CAPTURES,       // View captured handshakes

@@ -10,6 +10,7 @@
 #include "../modes/oink.h"
 #include "../modes/warhog.h"
 #include "../modes/piggyblues.h"
+#include "../modes/spectrum.h"
 #include "../gps/gps.h"
 #include "../web/fileserver.h"
 #include "menu.h"
@@ -78,6 +79,11 @@ void Display::update() {
             Avatar::draw(mainCanvas);
             Mood::draw(mainCanvas);
             XP::drawBar(mainCanvas);  // XP bar below grass
+            break;
+            
+        case PorkchopMode::SPECTRUM_MODE:
+            // Spectrum mode draws its own content including XP bar
+            SpectrumMode::draw(mainCanvas);
             break;
             
         case PorkchopMode::MENU:
@@ -157,6 +163,10 @@ void Display::drawTopBar() {
             break;
         case PorkchopMode::PIGGYBLUES_MODE:
             modeStr = "PIGGY BLUES";
+            modeColor = COLOR_ACCENT;
+            break;
+        case PorkchopMode::SPECTRUM_MODE:
+            modeStr = "HOG ON SPECTRUM";
             modeColor = COLOR_ACCENT;
             break;
         case PorkchopMode::MENU:
@@ -284,6 +294,9 @@ void Display::drawBottomBar() {
         char buf[48];
         snprintf(buf, sizeof(buf), "TX:%lu A:%lu G:%lu S:%lu W:%lu", total, apple, android, samsung, windows);
         stats = String(buf);
+    } else if (mode == PorkchopMode::SPECTRUM_MODE) {
+        // SPECTRUM: show selected network info or scan status
+        stats = SpectrumMode::getSelectedInfo();
     } else {
         // Default: Networks, Handshakes, Deauths
         uint16_t netCount = porkchop.getNetworkCount();

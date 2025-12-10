@@ -13,6 +13,7 @@
 #include "../modes/oink.h"
 #include "../modes/warhog.h"
 #include "../modes/piggyblues.h"
+#include "../modes/spectrum.h"
 #include "../web/fileserver.h"
 #include "config.h"
 #include "xp.h"
@@ -52,15 +53,16 @@ void Porkchop::init() {
     
     // Setup main menu with callback
     std::vector<MenuItem> mainMenuItems = {
-        {"OINK Mode", 1, "Hunt for handshakes"},
-        {"WARHOG Mode", 2, "Wardrive with GPS"},
-        {"PIGGY BLUES Mode", 8, "BLE notification spam"},
-        {"File Transfer", 3, "WiFi file server"},
-        {"Captures", 4, "View saved loot"},
-        {"Achievements", 9, "Proof of pwn"},
-        {"Log Viewer", 7, "Debug log tail"},
-        {"Settings", 5, "Tweak the pig"},
-        {"About", 6, "Credits and info"}
+        {"OINK", 1, "Hunt for handshakes"},
+        {"WARHOG", 2, "Wardrive with GPS"},
+        {"PIGGY BLUES", 8, "BLE notification spam"},
+        {"HOG ON SPECTRUM", 10, "WiFi spectrum analyzer"},
+        {"FILE TRANSFER", 3, "WiFi file server"},
+        {"CAPTURES", 4, "View saved loot"},
+        {"ACHIEVEMENTS", 9, "Proof of pwn"},
+        {"LOG VIEWER", 7, "Debug log tail"},
+        {"SETTINGS", 5, "Tweak the pig"},
+        {"ABOUT", 6, "Credits and info"}
     };
     Menu::setItems(mainMenuItems);
     Menu::setTitle("PORKCHOP");
@@ -77,6 +79,7 @@ void Porkchop::init() {
             case 7: setMode(PorkchopMode::LOG_VIEWER); break;
             case 8: setMode(PorkchopMode::PIGGYBLUES_MODE); break;
             case 9: setMode(PorkchopMode::ACHIEVEMENTS); break;
+            case 10: setMode(PorkchopMode::SPECTRUM_MODE); break;
         }
         Menu::clearSelected();
     });
@@ -124,6 +127,9 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::PIGGYBLUES_MODE:
             PiggyBluesMode::stop();
             break;
+        case PorkchopMode::SPECTRUM_MODE:
+            SpectrumMode::stop();
+            break;
         case PorkchopMode::MENU:
             Menu::hide();
             break;
@@ -170,6 +176,10 @@ void Porkchop::setMode(PorkchopMode mode) {
                 currentMode = PorkchopMode::MENU;
                 Menu::show();
             }
+            break;
+        case PorkchopMode::SPECTRUM_MODE:
+            Avatar::setState(AvatarState::HUNTING);
+            SpectrumMode::start();
             break;
         case PorkchopMode::MENU:
             Menu::show();
@@ -297,6 +307,10 @@ void Porkchop::handleInput() {
                 case 'B':
                     setMode(PorkchopMode::PIGGYBLUES_MODE);
                     break;
+                case 'h': // HOG ON SPECTRUM mode
+                case 'H':
+                    setMode(PorkchopMode::SPECTRUM_MODE);
+                    break;
                 case 's': // Settings
                 case 'S':
                     setMode(PorkchopMode::SETTINGS);
@@ -315,6 +329,14 @@ void Porkchop::handleInput() {
     
     // PIGGYBLUES mode - Backspace to stop and return to idle
     if (currentMode == PorkchopMode::PIGGYBLUES_MODE) {
+        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+            setMode(PorkchopMode::IDLE);
+            return;
+        }
+    }
+    
+    // SPECTRUM mode - Backspace to stop and return to idle
+    if (currentMode == PorkchopMode::SPECTRUM_MODE) {
         if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
             setMode(PorkchopMode::IDLE);
             return;
@@ -345,6 +367,9 @@ void Porkchop::updateMode() {
             break;
         case PorkchopMode::PIGGYBLUES_MODE:
             PiggyBluesMode::update();
+            break;
+        case PorkchopMode::SPECTRUM_MODE:
+            SpectrumMode::update();
             break;
         case PorkchopMode::CAPTURES:
             CapturesMenu::update();
