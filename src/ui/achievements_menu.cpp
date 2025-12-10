@@ -159,7 +159,7 @@ void AchievementsMenu::draw(M5Canvas& canvas) {
     canvas.fillScreen(TFT_BLACK);
     
     // Count unlocked
-    uint32_t unlocked = XP::getAchievements();
+    uint64_t unlocked = XP::getAchievements();
     int unlockedCount = 0;
     for (int i = 0; i < TOTAL_ACHIEVEMENTS; i++) {
         if (unlocked & ACHIEVEMENTS[i].flag) unlockedCount++;
@@ -245,7 +245,7 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
 }
 
 void AchievementsMenu::updateBottomOverlay() {
-    uint32_t unlocked = XP::getAchievements();
+    uint64_t unlocked = XP::getAchievements();
     bool hasIt = (unlocked & ACHIEVEMENTS[selectedIndex].flag) != 0;
     
     if (hasIt) {

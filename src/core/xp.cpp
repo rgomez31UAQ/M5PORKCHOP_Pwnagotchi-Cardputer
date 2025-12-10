@@ -518,7 +518,8 @@ void XP::unlockAchievement(PorkAchievement ach) {
     
     Serial.printf("[XP] Achievement unlocked: %s\n", ACHIEVEMENT_NAMES[idx]);
     
-    // Could trigger a toast here
+    // Save immediately to persist the achievement
+    save();
 }
 
 bool XP::hasAchievement(PorkAchievement ach) {
