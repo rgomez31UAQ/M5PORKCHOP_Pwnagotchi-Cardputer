@@ -58,7 +58,7 @@ void Porkchop::init() {
         {"PIGGY BLUES", 8, "BLE notification spam"},
         {"HOG ON SPECTRUM", 10, "WiFi spectrum analyzer"},
         {"FILE TRANSFER", 3, "WiFi file server"},
-        {"CAPTURES", 4, "View saved loot"},
+        {"LOOT", 4, "View saved loot"},
         {"ACHIEVEMENTS", 9, "Proof of pwn"},
         {"LOG VIEWER", 7, "Debug log tail"},
         {"SETTINGS", 5, "Tweak the pig"},

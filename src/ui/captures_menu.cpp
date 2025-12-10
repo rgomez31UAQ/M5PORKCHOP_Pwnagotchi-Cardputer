@@ -166,7 +166,7 @@ void CapturesMenu::draw(M5Canvas& canvas) {
     canvas.setTextColor(COLOR_FG);
     canvas.setTextSize(1);
     canvas.setCursor(4, 2);
-    canvas.printf("CAPTURES (%d)", captures.size());
+    canvas.printf("LOOT (%d)", captures.size());
     
     // Divider line
     canvas.drawFastHLine(0, 12, canvas.width(), COLOR_FG);
