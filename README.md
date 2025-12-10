@@ -322,6 +322,7 @@
         | B     | PIGGY BLUES - BLE chaos mode     |
         | H     | HOG ON SPECTRUM - WiFi analyzer  |
         | S     | Settings menu                    |
+        | P     | Screenshot - save to SD card     |
         | `     | Toggle menu / Go back            |
         | ;     | Navigate up / Scroll left        |
         | .     | Navigate down / Scroll right     |
@@ -333,6 +334,10 @@
     G0 is the physical button on the top side of the M5Cardputer.
     Press it anytime to bail out and return to IDLE. Useful when
     your piglet is going ham on someone's network.
+
+    Screenshots are saved to /screenshots/screenshotNNN.bmp on the SD
+    card. Takes about 1.4 seconds - piggy freezes briefly. Worth it
+    for the documentation flex.
 
 
 ----[ 6.1 - Screen Layout

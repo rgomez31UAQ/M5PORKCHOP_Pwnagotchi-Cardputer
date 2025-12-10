@@ -56,6 +56,10 @@ public:
     static void updateDimming();      // Call in update loop
     static bool isDimmed() { return dimmed; }
     
+    // Screenshot
+    static bool takeScreenshot();     // Save screen to SD card, returns success
+    static bool isSnapping() { return snapping; }  // True during screenshot save
+    
 private:
     static M5Canvas topBar;
     static M5Canvas mainCanvas;
@@ -68,6 +72,9 @@ private:
     // Dimming state
     static uint32_t lastActivityTime;
     static bool dimmed;
+    
+    // Screenshot state
+    static bool snapping;
     
     // Bottom bar overlay
     static String bottomOverlay;

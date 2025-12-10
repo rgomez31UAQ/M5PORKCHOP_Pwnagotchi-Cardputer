@@ -2,6 +2,7 @@
 
 #include "display.h"
 #include <M5Cardputer.h>
+#include <SD.h>
 #include "../core/porkchop.h"
 #include "../core/config.h"
 #include "../core/xp.h"
@@ -28,6 +29,7 @@ bool Display::wifiStatus = false;
 bool Display::mlStatus = false;
 uint32_t Display::lastActivityTime = 0;
 bool Display::dimmed = false;
+bool Display::snapping = false;
 String Display::bottomOverlay = "";
 
 extern Porkchop porkchop;
@@ -655,7 +657,7 @@ void Display::drawAboutScreen(M5Canvas& canvas) {
     canvas.drawString("by 0ct0", DISPLAY_W / 2, 38);
     
     // GitHub (single line)
-    canvas.drawString("github.com/neledov/M5Porkchop", DISPLAY_W / 2, 50);
+    canvas.drawString("github.com/neledov/M5PORKCHOP", DISPLAY_W / 2, 50);
     
     // XP stats - show level and rank
     canvas.setTextColor(COLOR_ACCENT);
@@ -747,4 +749,149 @@ void Display::updateDimming() {
         uint8_t dimLevel = Config::personality().dimLevel;
         M5.Display.setBrightness(dimLevel * 255 / 100);
     }
+}
+
+// Screenshot constants
+static const int SCREENSHOT_RETRY_COUNT = 3;
+static const int SCREENSHOT_RETRY_DELAY_MS = 10;
+
+// Helper: find next screenshot number by scanning directory
+static uint16_t getNextScreenshotNumber() {
+    uint16_t maxNum = 0;
+    
+    File dir = SD.open("/screenshots");
+    if (!dir || !dir.isDirectory()) {
+        return 1;
+    }
+    
+    File entry;
+    while ((entry = dir.openNextFile())) {
+        String name = entry.name();
+        entry.close();
+        
+        // Parse "screenshotNNN.bmp" format
+        if (name.startsWith("screenshot") && name.endsWith(".bmp")) {
+            String numStr = name.substring(10, name.length() - 4);
+            uint16_t num = numStr.toInt();
+            if (num > maxNum) maxNum = num;
+        }
+    }
+    dir.close();
+    
+    return maxNum + 1;
+}
+
+bool Display::takeScreenshot() {
+    // Prevent re-entry
+    if (snapping) return false;
+    
+    // Check SD availability
+    if (!Config::isSDAvailable()) {
+        showToast("No SD card!");
+        return false;
+    }
+    
+    snapping = true;
+    
+    // Show SNAP! toast first (will be visible in screenshot)
+    showToast("SNAP!");
+    delay(100);  // Brief delay so toast is visible
+    
+    // Ensure screenshots directory exists
+    if (!SD.exists("/screenshots")) {
+        SD.mkdir("/screenshots");
+    }
+    
+    // Find next available number
+    uint16_t num = getNextScreenshotNumber();
+    char path[48];
+    snprintf(path, sizeof(path), "/screenshots/screenshot%03d.bmp", num);
+    
+    Serial.printf("[DISPLAY] Taking screenshot: %s\n", path);
+    
+    // Open file with retry
+    File file;
+    for (int retry = 0; retry < SCREENSHOT_RETRY_COUNT; retry++) {
+        file = SD.open(path, FILE_WRITE);
+        if (file) break;
+        delay(SCREENSHOT_RETRY_DELAY_MS);
+    }
+    
+    if (!file) {
+        Serial.println("[DISPLAY] Failed to open screenshot file");
+        showToast("SD write failed!");
+        snapping = false;
+        return false;
+    }
+    
+    // BMP file structure for 240x135 24-bit image
+    int image_width = DISPLAY_W;
+    int image_height = DISPLAY_H;
+    
+    // Horizontal lines must be padded to multiple of 4 bytes
+    const uint32_t pad = (4 - (3 * image_width) % 4) % 4;
+    uint32_t filesize = 54 + (3 * image_width + pad) * image_height;
+    
+    // BMP header (54 bytes)
+    unsigned char header[54] = {
+        'B', 'M',           // BMP signature
+        0, 0, 0, 0,         // File size (filled below)
+        0, 0, 0, 0,         // Reserved
+        54, 0, 0, 0,        // Pixel data offset
+        40, 0, 0, 0,        // DIB header size
+        0, 0, 0, 0,         // Width (filled below)
+        0, 0, 0, 0,         // Height (filled below)
+        1, 0,               // Color planes
+        24, 0,              // Bits per pixel
+        0, 0, 0, 0,         // Compression (none)
+        0, 0, 0, 0,         // Image size (can be 0 for uncompressed)
+        0, 0, 0, 0,         // Horizontal resolution
+        0, 0, 0, 0,         // Vertical resolution
+        0, 0, 0, 0,         // Colors in palette
+        0, 0, 0, 0          // Important colors
+    };
+    
+    // Fill in size fields
+    for (uint32_t i = 0; i < 4; i++) {
+        header[2 + i] = (filesize >> (8 * i)) & 0xFF;
+        header[18 + i] = (image_width >> (8 * i)) & 0xFF;
+        header[22 + i] = (image_height >> (8 * i)) & 0xFF;
+    }
+    
+    file.write(header, 54);
+    
+    // Line buffer with padding
+    unsigned char line_data[image_width * 3 + pad];
+    
+    // Initialize padding bytes to 0
+    for (int i = image_width * 3; i < image_width * 3 + (int)pad; i++) {
+        line_data[i] = 0;
+    }
+    
+    // BMP stores bottom-to-top, so read from bottom up
+    for (int y = image_height - 1; y >= 0; y--) {
+        // Read one line of RGB data from display
+        M5.Display.readRectRGB(0, y, image_width, 1, line_data);
+        
+        // Swap R and B (BMP uses BGR order)
+        for (int x = 0; x < image_width; x++) {
+            unsigned char temp = line_data[x * 3];
+            line_data[x * 3] = line_data[x * 3 + 2];
+            line_data[x * 3 + 2] = temp;
+        }
+        
+        file.write(line_data, image_width * 3 + pad);
+    }
+    
+    file.close();
+    
+    Serial.printf("[DISPLAY] Screenshot saved: %s (%lu bytes)\n", path, filesize);
+    
+    // Show success toast with filename
+    char msg[32];
+    snprintf(msg, sizeof(msg), "Saved #%d", num);
+    showToast(msg);
+    
+    snapping = false;
+    return true;
 }

@@ -100,6 +100,7 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
 - **Enter** - Select/Toggle/Confirm
 - **Backtick (`)** - Open menu / Exit to previous mode
 - **O/W/B/H/S** - Quick mode shortcuts from IDLE (Oink/Warhog/piggyBlues/Hog on spectrum/Settings)
+- **P** - Take screenshot (saves to `/screenshots/screenshotNNN.bmp` on SD card)
 - **Backspace** - Stop current mode and return to IDLE
 - **G0 button** - Physical button on top, returns to IDLE from any mode (uses GPIO0 direct read)
 

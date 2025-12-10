@@ -283,6 +283,14 @@ void Porkchop::handleInput() {
         return;
     }
     
+    // Screenshot with P key (global, works in any mode)
+    if (M5Cardputer.Keyboard.isKeyPressed('p') || M5Cardputer.Keyboard.isKeyPressed('P')) {
+        if (!Display::isSnapping()) {
+            Display::takeScreenshot();
+        }
+        return;
+    }
+    
     // Enter key to go back from About
     if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
         if (currentMode == PorkchopMode::ABOUT) {
