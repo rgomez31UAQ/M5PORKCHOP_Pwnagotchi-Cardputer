@@ -262,7 +262,7 @@ void test_escapeCSV_with_quote(void) {
     const char* input = "Net\"work";
     size_t len = escapeCSV(input, output, 0, sizeof(output));
     TEST_ASSERT_EQUAL_STRING("\"Net\"\"work\"", output);  // Quote doubled
-    TEST_ASSERT_EQUAL_UINT(12, len);  // 8 chars + 2 for doubled quote + 2 outer quotes
+    TEST_ASSERT_EQUAL_UINT(11, len);  // 7 chars + 2 for doubled quote + 2 outer quotes = 11
 }
 
 void test_escapeCSV_with_multiple_quotes(void) {
@@ -270,7 +270,7 @@ void test_escapeCSV_with_multiple_quotes(void) {
     const char* input = "\"test\"";
     size_t len = escapeCSV(input, output, 0, sizeof(output));
     TEST_ASSERT_EQUAL_STRING("\"\"\"test\"\"\"", output);  // Each quote doubled
-    TEST_ASSERT_EQUAL_UINT(12, len);
+    TEST_ASSERT_EQUAL_UINT(10, len);  // 4 letters + 4 chars (2 doubled quotes) + 2 outer = 10
 }
 
 void test_escapeCSV_strips_control_chars(void) {
@@ -334,9 +334,9 @@ void test_escapeCSV_with_maxInputLen(void) {
 }
 
 void test_escapeCSV_buffer_size_calculation(void) {
-    const char* input = "Test\"Net";  // 8 chars, quote doubles
+    const char* input = "Test\"Net";  // 8 chars with embedded quote
     size_t required = escapeCSV(input, nullptr, 0, 0);
-    // "Test""Net" with outer quotes = 2 + 4 + 2 + 3 = 11
+    // "Test""Net" = 1 + 4 + 2 + 3 + 1 = 11 (outer quotes + content with doubled quote)
     TEST_ASSERT_EQUAL_UINT(11, required);
 }
 
