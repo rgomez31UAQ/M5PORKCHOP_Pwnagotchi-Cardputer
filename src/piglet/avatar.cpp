@@ -266,22 +266,22 @@ void Avatar::updateGrass() {
     lastGrassUpdate = now;
     
     // Shift pattern based on pig facing direction
-    // Pig faces right = grass scrolls right (background moves past pig)
-    // Pig faces left = grass scrolls left (background moves past pig)
+    // Pig faces right = grass scrolls LEFT (ground moves under pig's feet)
+    // Pig faces left = grass scrolls RIGHT (ground moves under pig's feet)
     if (facingRight) {
-        // Shift right
-        char last = grassPattern[25];
-        for (int i = 25; i > 0; i--) {
-            grassPattern[i] = grassPattern[i - 1];
-        }
-        grassPattern[0] = last;
-    } else {
-        // Shift left
+        // Shift left (pig walking right, ground moves left under feet)
         char first = grassPattern[0];
         for (int i = 0; i < 25; i++) {
             grassPattern[i] = grassPattern[i + 1];
         }
         grassPattern[25] = first;
+    } else {
+        // Shift right (pig walking left, ground moves right under feet)
+        char last = grassPattern[25];
+        for (int i = 25; i > 0; i--) {
+            grassPattern[i] = grassPattern[i - 1];
+        }
+        grassPattern[0] = last;
     }
     
     // Occasionally mutate a character for variety
