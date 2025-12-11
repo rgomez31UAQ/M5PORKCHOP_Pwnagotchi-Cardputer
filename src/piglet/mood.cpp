@@ -38,6 +38,12 @@ static int lastThresholdMood = 50;  // Track for threshold crossing detection
 static const int MOOD_PEEK_HIGH_THRESHOLD = 70;   // Happy peek triggers above this
 static const int MOOD_PEEK_LOW_THRESHOLD = -30;   // Sad peek triggers below this
 
+// Force trigger a mood peek (for significant events like handshake capture)
+static void forceMoodPeek() {
+    moodPeekActive = true;
+    moodPeekStartTime = millis();
+}
+
 // --- Mood Momentum Implementation ---
 
 void Mood::applyMomentumBoost(int amount) {
@@ -579,6 +585,9 @@ void Mood::onHandshakeCaptured(const char* apName) {
     if (Config::personality().soundEnabled) {
         M5.Speaker.tone(1500, 150);  // Distinctive handshake beep
     }
+    
+    // Force mood peek to show EXCITED face regardless of threshold
+    forceMoodPeek();
 }
 
 void Mood::onPMKIDCaptured(const char* apName) {
@@ -626,6 +635,9 @@ void Mood::onPMKIDCaptured(const char* apName) {
     
     // Auto-save the PMKID
     OinkMode::saveAllPMKIDs();
+    
+    // Force mood peek to show EXCITED face regardless of threshold
+    forceMoodPeek();
 }
 
 void Mood::onNewNetwork(const char* apName, int8_t rssi, uint8_t channel) {
@@ -1139,6 +1151,9 @@ void Mood::onDeauthSuccess(const uint8_t* clientMac) {
     if (Config::personality().soundEnabled) {
         M5.Speaker.tone(800, 50);
     }
+    
+    // Force mood peek to show emotional reaction
+    forceMoodPeek();
 }
 
 void Mood::onIdle() {
