@@ -13,6 +13,47 @@ uint32_t Mood::lastPhraseChange = 0;
 uint32_t Mood::phraseInterval = 5000;
 uint32_t Mood::lastActivityTime = 0;
 
+// Mood momentum system
+int Mood::momentumBoost = 0;
+uint32_t Mood::lastBoostTime = 0;
+
+// Phrase queue for chaining
+String Mood::phraseQueue[3] = {"", "", ""};
+uint8_t Mood::phraseQueueCount = 0;
+uint32_t Mood::lastQueuePop = 0;
+
+// --- Mood Momentum Implementation ---
+
+void Mood::applyMomentumBoost(int amount) {
+    momentumBoost += amount;
+    // Cap at +/- 50 to prevent runaway
+    momentumBoost = constrain(momentumBoost, -50, 50);
+    lastBoostTime = millis();
+}
+
+void Mood::decayMomentum() {
+    if (momentumBoost == 0) return;
+    
+    uint32_t elapsed = millis() - lastBoostTime;
+    if (elapsed >= MOMENTUM_DECAY_MS) {
+        // Full decay
+        momentumBoost = 0;
+    } else {
+        // Linear decay towards zero
+        float decayFactor = 1.0f - (float)elapsed / (float)MOMENTUM_DECAY_MS;
+        // Store original sign
+        int sign = (momentumBoost > 0) ? 1 : -1;
+        int originalAbs = abs(momentumBoost);
+        int decayedAbs = (int)(originalAbs * decayFactor);
+        momentumBoost = sign * decayedAbs;
+    }
+}
+
+int Mood::getEffectiveHappiness() {
+    decayMomentum();  // Update momentum before calculating
+    return constrain(happiness + momentumBoost, -100, 100);
+}
+
 // Phrase category enum for no-repeat tracking
 enum class PhraseCategory : uint8_t {
     HAPPY, EXCITED, HUNTING, SLEEPY, SAD, WARHOG, WARHOG_FOUND,
@@ -181,6 +222,13 @@ void Mood::init() {
     lastPhraseChange = millis();
     phraseInterval = 5000;
     lastActivityTime = millis();
+    
+    // Reset momentum system
+    momentumBoost = 0;
+    lastBoostTime = 0;
+    
+    // Reset phrase queue
+    phraseQueueCount = 0;
 }
 
 void Mood::update() {
@@ -203,7 +251,8 @@ void Mood::update() {
 }
 
 void Mood::onHandshakeCaptured(const char* apName) {
-    happiness = min(happiness + 30, 100);
+    happiness = min(happiness + 10, 100);  // Smaller permanent boost
+    applyMomentumBoost(30);  // Big temporary excitement!
     lastActivityTime = millis();
     
     // Award XP for handshake capture
@@ -241,7 +290,8 @@ void Mood::onHandshakeCaptured(const char* apName) {
 }
 
 void Mood::onPMKIDCaptured(const char* apName) {
-    happiness = min(happiness + 40, 100);  // Even happier than handshake!
+    happiness = min(happiness + 15, 100);  // Slightly bigger permanent boost
+    applyMomentumBoost(40);  // Even more temporary excitement!
     lastActivityTime = millis();
     
     // Award XP for PMKID capture (75 XP - more than handshake)
@@ -271,7 +321,8 @@ void Mood::onPMKIDCaptured(const char* apName) {
 }
 
 void Mood::onNewNetwork(const char* apName, int8_t rssi, uint8_t channel) {
-    happiness = min(happiness + 10, 100);
+    happiness = min(happiness + 3, 100);  // Small permanent boost
+    applyMomentumBoost(10);  // Quick excitement for network find
     lastActivityTime = millis();
     
     // Award XP for network discovery
@@ -370,7 +421,8 @@ void Mood::onWiFiLost() {
 }
 
 void Mood::onGPSFix() {
-    happiness = min(happiness + 10, 100);
+    happiness = min(happiness + 5, 100);  // Small permanent boost
+    applyMomentumBoost(15);  // Happy about GPS lock!
     lastActivityTime = millis();
     
     // Award XP for GPS lock (handled by session flag in XP to avoid duplicates)
@@ -384,7 +436,8 @@ void Mood::onGPSFix() {
 }
 
 void Mood::onGPSLost() {
-    happiness = max(happiness - 10, -100);
+    happiness = max(happiness - 5, -100);  // Small permanent dip
+    applyMomentumBoost(-15);  // Temporary sadness
     currentPhrase = "gps lost sad piggy";
     lastPhraseChange = millis();
 }
@@ -399,21 +452,24 @@ void Mood::selectPhrase() {
     int count;
     PhraseCategory cat;
     
-    if (happiness > 70) {
+    // Use effective happiness (base + momentum) for phrase selection
+    int effectiveMood = getEffectiveHappiness();
+    
+    if (effectiveMood > 70) {
         // High happiness but not from handshake - use HAPPY not EXCITED
         // EXCITED phrases reserved for actual handshake captures
         phrases = PHRASES_HAPPY;
         count = sizeof(PHRASES_HAPPY) / sizeof(PHRASES_HAPPY[0]);
         cat = PhraseCategory::HAPPY;
-    } else if (happiness > 30) {
+    } else if (effectiveMood > 30) {
         phrases = PHRASES_HAPPY;
         count = sizeof(PHRASES_HAPPY) / sizeof(PHRASES_HAPPY[0]);
         cat = PhraseCategory::HAPPY;
-    } else if (happiness > -10) {
+    } else if (effectiveMood > -10) {
         phrases = PHRASES_HUNTING;
         count = sizeof(PHRASES_HUNTING) / sizeof(PHRASES_HUNTING[0]);
         cat = PhraseCategory::HUNTING;
-    } else if (happiness > -50) {
+    } else if (effectiveMood > -50) {
         phrases = PHRASES_SLEEPY;
         count = sizeof(PHRASES_SLEEPY) / sizeof(PHRASES_SLEEPY[0]);
         cat = PhraseCategory::SLEEPY;
@@ -428,13 +484,16 @@ void Mood::selectPhrase() {
 }
 
 void Mood::updateAvatarState() {
-    if (happiness > 70) {
+    // Use effective happiness (base + momentum) for avatar state
+    int effectiveMood = getEffectiveHappiness();
+    
+    if (effectiveMood > 70) {
         Avatar::setState(AvatarState::EXCITED);
-    } else if (happiness > 30) {
+    } else if (effectiveMood > 30) {
         Avatar::setState(AvatarState::HAPPY);
-    } else if (happiness > -10) {
+    } else if (effectiveMood > -10) {
         Avatar::setState(AvatarState::NEUTRAL);
-    } else if (happiness > -50) {
+    } else if (effectiveMood > -50) {
         Avatar::setState(AvatarState::SLEEPY);
     } else {
         Avatar::setState(AvatarState::SAD);
@@ -583,7 +642,8 @@ void Mood::onDeauthing(const char* apName, uint32_t deauthCount) {
 
 void Mood::onDeauthSuccess(const uint8_t* clientMac) {
     lastActivityTime = millis();
-    happiness = min(happiness + 15, 100);
+    happiness = min(happiness + 3, 100);  // Small permanent boost
+    applyMomentumBoost(15);  // Temporary excitement
     
     // Award XP for successful deauth
     XP::addXP(XPEvent::DEAUTH_SUCCESS);
@@ -622,7 +682,8 @@ void Mood::onWarhogFound(const char* apName, uint8_t channel) {
     (void)channel; // Currently unused
     
     lastActivityTime = millis();
-    happiness = min(100, happiness + 5);
+    happiness = min(100, happiness + 2);  // Small permanent boost
+    applyMomentumBoost(8);  // Quick excitement for find
     
     // Award XP for WARHOG network logged with GPS
     XP::addXP(XPEvent::WARHOG_LOGGED);
@@ -634,7 +695,8 @@ void Mood::onWarhogFound(const char* apName, uint8_t channel) {
 
 void Mood::onPiggyBluesUpdate(const char* vendor, int8_t rssi, uint8_t targetCount, uint8_t totalFound) {
     lastActivityTime = millis();
-    happiness = min(100, happiness + 2);
+    happiness = min(100, happiness + 1);  // Tiny permanent boost
+    applyMomentumBoost(5);  // Small excitement for spam activity
     
     // Award XP for BLE spam (vendor-specific tracking for achievements)
     if (vendor != nullptr) {

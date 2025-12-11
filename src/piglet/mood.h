@@ -34,14 +34,27 @@ public:
     // Get current mood phrase
     static const String& getCurrentPhrase();
     static int getCurrentHappiness();
+    static int getEffectiveHappiness();  // Happiness with momentum applied
     
 private:
     static String currentPhrase;
-    static int happiness;  // -100 to 100
+    static int happiness;  // -100 to 100 (base level)
     static uint32_t lastPhraseChange;
     static uint32_t phraseInterval;
     static uint32_t lastActivityTime;
     
+    // Mood momentum system - recent boosts decay over time
+    static int momentumBoost;           // Current boost amount (decays)
+    static uint32_t lastBoostTime;      // When boost was applied
+    static const uint32_t MOMENTUM_DECAY_MS = 30000;  // 30s full decay
+    
+    // Phrase queue for chaining (Phase 6)
+    static String phraseQueue[3];
+    static uint8_t phraseQueueCount;
+    static uint32_t lastQueuePop;
+    
     static void selectPhrase();
     static void updateAvatarState();
+    static void applyMomentumBoost(int amount);
+    static void decayMomentum();
 };
