@@ -873,7 +873,18 @@ void Mood::updateAvatarState() {
                                mode == PorkchopMode::PIGGYBLUES_MODE ||
                                mode == PorkchopMode::SPECTRUM_MODE);
     
+    // Track mode transitions to sync threshold on mode entry
+    static PorkchopMode lastMode = PorkchopMode::IDLE;
+    bool justEnteredModeLock = isModeLockedState && (lastMode != mode);
+    lastMode = mode;
+    
     if (isModeLockedState) {
+        // On mode entry, sync threshold to current mood to avoid false peek
+        if (justEnteredModeLock) {
+            lastThresholdMood = effectiveMood;
+            moodPeekActive = false;  // Reset any active peek
+        }
+        
         // Check for threshold crossings (mood peek triggers)
         bool crossedHigh = (lastThresholdMood <= MOOD_PEEK_HIGH_THRESHOLD && 
                             effectiveMood > MOOD_PEEK_HIGH_THRESHOLD);
