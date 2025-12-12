@@ -685,3 +685,235 @@ inline float calculateEvilTwinScore(bool isHidden, int8_t rssi) {
     }
     return score;
 }
+
+// ============================================================================
+// MAC Address Utilities
+// From: src/modes/warhog.h (bssidToKey)
+// From: src/core/wsl_bypasser.cpp (randomizeMAC)
+// ============================================================================
+
+// Convert 6-byte MAC address to 64-bit key for map/set storage
+// Uses big-endian packing: mac[0] in highest byte position
+inline uint64_t bssidToKey(const uint8_t* bssid) {
+    return ((uint64_t)bssid[0] << 40) | ((uint64_t)bssid[1] << 32) |
+           ((uint64_t)bssid[2] << 24) | ((uint64_t)bssid[3] << 16) |
+           ((uint64_t)bssid[4] << 8) | bssid[5];
+}
+
+// Convert 64-bit key back to 6-byte MAC address
+inline void keyToBssid(uint64_t key, uint8_t* bssid) {
+    bssid[0] = (uint8_t)(key >> 40);
+    bssid[1] = (uint8_t)(key >> 32);
+    bssid[2] = (uint8_t)(key >> 24);
+    bssid[3] = (uint8_t)(key >> 16);
+    bssid[4] = (uint8_t)(key >> 8);
+    bssid[5] = (uint8_t)key;
+}
+
+// Apply locally-administered MAC bit manipulation
+// Sets locally administered bit (bit 1 of first byte) and clears multicast bit (bit 0)
+// This transforms any MAC into a valid unicast locally-administered address
+inline void applyLocalMACBits(uint8_t* mac) {
+    mac[0] = (mac[0] & 0xFC) | 0x02;
+}
+
+// Check if MAC is a valid locally-administered unicast address
+// Locally administered bit (bit 1) set, multicast bit (bit 0) clear
+inline bool isValidLocalMAC(const uint8_t* mac) {
+    return (mac[0] & 0x03) == 0x02;
+}
+
+// Format MAC address as colon-separated hex string
+// Output buffer must be at least 18 bytes (17 chars + null)
+// Returns number of characters written (not including null)
+inline size_t formatMAC(const uint8_t* mac, char* output, size_t maxLen) {
+    if (output == nullptr || maxLen < 18) return 0;
+    
+    const char hex[] = "0123456789ABCDEF";
+    size_t pos = 0;
+    
+    for (int i = 0; i < 6; i++) {
+        if (i > 0) {
+            output[pos++] = ':';
+        }
+        output[pos++] = hex[(mac[i] >> 4) & 0x0F];
+        output[pos++] = hex[mac[i] & 0x0F];
+    }
+    output[pos] = '\0';
+    return pos;
+}
+
+// Parse MAC address from colon-separated hex string
+// Returns true if parsing succeeded, false otherwise
+inline bool parseMAC(const char* str, uint8_t* mac) {
+    if (str == nullptr || mac == nullptr) return false;
+    
+    int values[6];
+    int count = 0;
+    const char* p = str;
+    
+    while (*p && count < 6) {
+        // Parse hex byte
+        int val = 0;
+        for (int i = 0; i < 2; i++) {
+            char c = *p++;
+            if (c >= '0' && c <= '9') val = (val << 4) | (c - '0');
+            else if (c >= 'A' && c <= 'F') val = (val << 4) | (c - 'A' + 10);
+            else if (c >= 'a' && c <= 'f') val = (val << 4) | (c - 'a' + 10);
+            else return false;
+        }
+        values[count++] = val;
+        
+        // Skip separator if present
+        if (*p == ':' || *p == '-') p++;
+    }
+    
+    if (count != 6) return false;
+    
+    for (int i = 0; i < 6; i++) {
+        mac[i] = (uint8_t)values[i];
+    }
+    return true;
+}
+
+// ============================================================================
+// PCAP File Format Structures
+// From: src/modes/oink.cpp (PCAPHeader, PCAPPacketHeader)
+// ============================================================================
+
+// PCAP global header (24 bytes)
+// Used at start of pcap file
+#pragma pack(push, 1)
+struct TestPCAPHeader {
+    uint32_t magic;           // 0xA1B2C3D4 for little-endian
+    uint16_t version_major;   // 2
+    uint16_t version_minor;   // 4
+    int32_t thiszone;         // GMT offset (usually 0)
+    uint32_t sigfigs;         // Timestamp accuracy (usually 0)
+    uint32_t snaplen;         // Max capture length (65535)
+    uint32_t linktype;        // 105 = LINKTYPE_IEEE802_11
+};
+
+// PCAP packet header (16 bytes)
+// Precedes each captured packet
+struct TestPCAPPacketHeader {
+    uint32_t ts_sec;          // Timestamp seconds
+    uint32_t ts_usec;         // Timestamp microseconds
+    uint32_t incl_len;        // Captured length
+    uint32_t orig_len;        // Original length
+};
+#pragma pack(pop)
+
+// PCAP magic numbers
+static const uint32_t PCAP_MAGIC_LE = 0xA1B2C3D4;  // Little-endian
+static const uint32_t PCAP_MAGIC_BE = 0xD4C3B2A1;  // Big-endian
+static const uint32_t LINKTYPE_IEEE802_11 = 105;
+
+// Initialize PCAP global header with standard values
+inline void initPCAPHeader(TestPCAPHeader* hdr) {
+    hdr->magic = PCAP_MAGIC_LE;
+    hdr->version_major = 2;
+    hdr->version_minor = 4;
+    hdr->thiszone = 0;
+    hdr->sigfigs = 0;
+    hdr->snaplen = 65535;
+    hdr->linktype = LINKTYPE_IEEE802_11;
+}
+
+// Initialize PCAP packet header from timestamp and length
+inline void initPCAPPacketHeader(TestPCAPPacketHeader* hdr, uint32_t ts_ms, uint16_t len) {
+    hdr->ts_sec = ts_ms / 1000;
+    hdr->ts_usec = (ts_ms % 1000) * 1000;
+    hdr->incl_len = len;
+    hdr->orig_len = len;
+}
+
+// Validate PCAP header magic and version
+inline bool isValidPCAPHeader(const TestPCAPHeader* hdr) {
+    if (hdr->magic != PCAP_MAGIC_LE && hdr->magic != PCAP_MAGIC_BE) return false;
+    if (hdr->version_major != 2) return false;
+    if (hdr->version_minor != 4) return false;
+    return true;
+}
+
+// ============================================================================
+// Deauth Frame Construction
+// From: src/core/wsl_bypasser.cpp (sendDeauthFrame)
+// ============================================================================
+
+// Deauth frame size
+static const size_t DEAUTH_FRAME_SIZE = 26;
+
+// Deauth frame offsets
+static const size_t DEAUTH_OFFSET_FRAME_CTRL = 0;   // 2 bytes
+static const size_t DEAUTH_OFFSET_DURATION = 2;     // 2 bytes
+static const size_t DEAUTH_OFFSET_DA = 4;           // 6 bytes (destination address)
+static const size_t DEAUTH_OFFSET_SA = 10;          // 6 bytes (source address)
+static const size_t DEAUTH_OFFSET_BSSID = 16;       // 6 bytes
+static const size_t DEAUTH_OFFSET_SEQ = 22;         // 2 bytes (sequence control)
+static const size_t DEAUTH_OFFSET_REASON = 24;      // 2 bytes (reason code)
+
+// Frame control values
+static const uint16_t FRAME_CTRL_DEAUTH = 0x00C0;   // Type: Management, Subtype: Deauth
+static const uint16_t FRAME_CTRL_DISASSOC = 0x00A0; // Type: Management, Subtype: Disassoc
+
+// Build a deauth frame in provided buffer (must be >= 26 bytes)
+// Returns frame size (always 26)
+inline size_t buildDeauthFrame(uint8_t* frame, const uint8_t* bssid, 
+                                const uint8_t* station, uint8_t reason) {
+    // Frame control (deauth)
+    frame[0] = 0xC0;
+    frame[1] = 0x00;
+    
+    // Duration
+    frame[2] = 0x00;
+    frame[3] = 0x00;
+    
+    // Destination address (station being deauthed)
+    for (int i = 0; i < 6; i++) {
+        frame[DEAUTH_OFFSET_DA + i] = station[i];
+    }
+    
+    // Source address (spoofed as AP)
+    for (int i = 0; i < 6; i++) {
+        frame[DEAUTH_OFFSET_SA + i] = bssid[i];
+    }
+    
+    // BSSID
+    for (int i = 0; i < 6; i++) {
+        frame[DEAUTH_OFFSET_BSSID + i] = bssid[i];
+    }
+    
+    // Sequence control
+    frame[22] = 0x00;
+    frame[23] = 0x00;
+    
+    // Reason code (2 bytes, little endian)
+    frame[24] = reason;
+    frame[25] = 0x00;
+    
+    return DEAUTH_FRAME_SIZE;
+}
+
+// Build a disassoc frame (same structure, different frame control)
+inline size_t buildDisassocFrame(uint8_t* frame, const uint8_t* bssid,
+                                  const uint8_t* station, uint8_t reason) {
+    size_t len = buildDeauthFrame(frame, bssid, station, reason);
+    // Change frame control to disassoc
+    frame[0] = 0xA0;
+    return len;
+}
+
+// Verify deauth frame structure
+inline bool isValidDeauthFrame(const uint8_t* frame, size_t len) {
+    if (len < DEAUTH_FRAME_SIZE) return false;
+    if (frame[0] != 0xC0 || frame[1] != 0x00) return false;
+    return true;
+}
+
+// Verify disassoc frame structure
+inline bool isValidDisassocFrame(const uint8_t* frame, size_t len) {
+    if (len < DEAUTH_FRAME_SIZE) return false;
+    if (frame[0] != 0xA0 || frame[1] != 0x00) return false;
+    return true;
+}

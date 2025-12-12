@@ -35,10 +35,11 @@
     needed. Just raw C++ getting poked with asserts until it proves it
     works.
 
-    300+ tests across 9 files. String validation, channel helpers, RSSI
+    370+ tests across 10 files. String validation, channel helpers, RSSI
     conversion, time unit utilities, GPS distance, ML feature extraction,
     beacon parsing, anomaly scoring, string escaping, feature vector 
-    mapping, classifier score normalization, and the whole XP/leveling 
+    mapping, classifier score normalization, MAC utilities, PCAP structure
+    validation, deauth frame construction, and the whole XP/leveling 
     system. If you break something, you'll know before CI yells at you.
 
 
@@ -59,10 +60,11 @@
     | test_features/test_feature_extraction.cpp     | ML features (27 tests)    |
     | test_beacon/test_beacon_parsing.cpp           | Beacon parsing (19 tests) |
     | test_classifier/test_heuristic_classifier.cpp | Anomaly scoring (26 tests)|
-    | test_classifier/test_classifier_scores.cpp    | Score normalization (43)  |
+    | test_classifier_scores/test_classifier_scores.cpp | Score normalization (43)|
     | test_utils/test_utils.cpp                     | Utility functions (58 tests)|
     | test_string_escape/test_string_escape.cpp     | XML/CSV escaping (45 tests)|
     | test_feature_vector/test_feature_vector.cpp   | Feature mapping (27 tests)|
+    | test_mac_utils/test_mac_utils.cpp             | MAC/PCAP/deauth (68 tests)|
     +-----------------------------------------------+---------------------------+
 
 
