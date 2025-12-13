@@ -157,7 +157,7 @@ void AchievementsMenu::draw(M5Canvas& canvas) {
         return;
     }
     
-    canvas.fillScreen(TFT_BLACK);
+    canvas.fillSprite(COLOR_BG);
     
     // Get unlocked achievements
     uint64_t unlocked = XP::getAchievements();

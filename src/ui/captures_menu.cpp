@@ -142,10 +142,12 @@ void CapturesMenu::handleInput() {
         if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) {
             nukeLoot();
             nukeConfirmActive = false;
+            Display::clearBottomOverlay();
             scanCaptures();  // Refresh list (should be empty now)
         } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N') ||
                    M5Cardputer.Keyboard.isKeyPressed('`') || keys.enter) {
             nukeConfirmActive = false;  // Cancel
+            Display::clearBottomOverlay();
         }
         return;
     }
@@ -173,11 +175,12 @@ void CapturesMenu::handleInput() {
     if (M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D')) {
         if (!captures.empty()) {
             nukeConfirmActive = true;
+            Display::setBottomOverlay("PERMANENT | NO UNDO");
         }
     }
     
-    // Exit with backtick or Enter
-    if (keys.enter || M5Cardputer.Keyboard.isKeyPressed('`')) {
+    // Exit with backtick only
+    if (M5Cardputer.Keyboard.isKeyPressed('`')) {
         hide();
     }
 }
@@ -197,7 +200,7 @@ String CapturesMenu::formatTime(time_t t) {
 void CapturesMenu::draw(M5Canvas& canvas) {
     if (!active) return;
     
-    canvas.fillScreen(TFT_BLACK);
+    canvas.fillSprite(COLOR_BG);
     canvas.setTextColor(COLOR_FG);
     canvas.setTextSize(1);
     
@@ -219,7 +222,7 @@ void CapturesMenu::draw(M5Canvas& canvas) {
         // Highlight selected
         if (i == selectedIndex) {
             canvas.fillRect(0, y - 1, canvas.width(), lineHeight, COLOR_FG);
-            canvas.setTextColor(TFT_BLACK);
+            canvas.setTextColor(COLOR_BG);
         } else {
             canvas.setTextColor(COLOR_FG);
         }
