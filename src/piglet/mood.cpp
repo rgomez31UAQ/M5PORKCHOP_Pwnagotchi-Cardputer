@@ -396,15 +396,15 @@ const char* PHRASES_DEAUTH_SUCCESS[] = {
 
 // PMKID captured - clientless hash extraction style
 const char* PHRASES_PMKID_CAPTURED[] = {
-    "PMKID EXTRACTED!",
-    "CLIENTLESS HASH!",
-    "RSN IE PWNED!",
-    "EAPOL-FREE LOOT!",
-    "PASSIVE EXTRACTION!",
-    "HASHCAT READY!",
-    "RSN FAIL LOL!",
-    "PMKID YOINKED!",
-    "NO CLIENTS NEEDED!"
+    "pmkid yoinked",
+    "clientless hash",
+    "rsn ie pwned",
+    "eapol-free loot",
+    "passive extraction",
+    "hashcat ready",
+    "no client needed",
+    "pmkid extracted",
+    "silent pwn mode"
 };
 
 // Rare phrases - 5% chance to appear for surprise variety
