@@ -52,7 +52,7 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
 - `src/ui/display.cpp/h` - Triple-buffered canvas system (topBar, mainCanvas, bottomBar), 240x135 display, showToast(), showLevelUp()
 - `src/ui/menu.cpp/h` - Main menu with callback system
 - `src/ui/settings_menu.cpp/h` - Interactive settings with TOGGLE, VALUE, ACTION, TEXT item types
-- `src/ui/captures_menu.cpp/h` - LOOT menu: captured handshakes/PMKID viewer
+- `src/ui/captures_menu.cpp/h` - LOOT menu: captured handshakes/PMKID viewer, nuke loot feature
 - `src/ui/achievements_menu.cpp/h` - Achievements viewer with unlock descriptions
 - `src/ui/log_viewer.cpp/h` - SD card log file viewer with scrolling
 - `src/ui/swine_stats.cpp/h` - Lifetime stats overlay with buff/debuff system
@@ -611,6 +611,32 @@ Deauth attacks run in ATTACKING state with 100ms minimum cycle time:
 **D: counter** shows forward deauths only (reverse deauths and disassocs not counted).
 **If D: shows ~10/sec**: No clients discovered during LOCKING phase - only broadcast deauth.
 **If D: resets to 0**: State transition to NEXT_TARGET (normal cycling behavior).
+
+### OINK Mode - Hashcat 22000 Format Export
+Captured handshakes and PMKIDs are saved in hashcat-ready format:
+
+**WPA*02 (EAPOL handshake):**
+```
+WPA*02*MIC*MAC_AP*MAC_CLIENT*ESSID*NONCE_AP*EAPOL_CLIENT*MESSAGEPAIR
+```
+- MIC: 16 bytes extracted from M2 frame (offset 81, NOT 77)
+- EAPOL: Full M2 frame with MIC zeroed for verification
+- MESSAGEPAIR: 0x00 for M1+M2, 0x02 for M2+M3 fallback
+- Saved as `BSSID_hs.22000`
+
+**WPA*01 (PMKID):**
+```
+WPA*01*PMKID*MAC_AP*MAC_CLIENT*ESSID***01
+```
+- PMKID: 16 bytes from PMKID KDE in M1 Key Data
+- 01 = PMKID taken from AP
+- Saved as `BSSID.22000`
+
+**PMKID Filtering:**
+- Some APs include PMKID KDE (`dd 14 00 0f ac 04`) but with all-zero data
+- These are useless for cracking (no cached PMK for client)
+- Code skips zero PMKIDs during extraction AND save
+- If piglet announces PMKID capture, it's a real crackable one
 
 ### MAC Randomization
 `WSLBypasser::randomizeMAC()` generates a random locally-administered MAC on mode start:

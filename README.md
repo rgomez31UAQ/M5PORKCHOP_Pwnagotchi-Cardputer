@@ -80,12 +80,14 @@
         * Promiscuous mode packet capture  
         * EAPOL frame detection and 4-way handshake reconstruction
         * PMKID yoink from M1 frames - no client needed, pure stealth
+        * Smart PMKID filtering - zero/empty PMKIDs get tossed (useless cruft)
         * Deauth capability for... "authorized testing purposes"
         * Real-time ML classification of suspicious APs
         * Auto-attack mode cycles through targets automatically
         * Targeted deauth prioritizes discovered clients
         * PCAP export to SD for post-processing
-        * Hashcat 22000 format export - fire up that GPU and let it rip
+        * Hashcat 22000 format export - both EAPOL (_hs.22000) and PMKID (.22000)
+        * Fire up that GPU: `hashcat -m 22000 loot.22000 wordlist.txt`
 
     Stealth features (because WIDS exist):
 
@@ -169,6 +171,33 @@
 
     Set your network creds in Settings before trying to connect or the
     pig will stare at you blankly wondering what you expected.
+
+
+----[ 3.6.1 - LOOT Menu
+
+    Your spoils of war. Hit LOOT from the main menu to see what
+    you've captured:
+
+        * Browse all captured handshakes and PMKIDs
+        * [HS] = full 4-way handshake (.pcap + _hs.22000)
+        * [PMKID] = clientless PMKID capture (.22000)
+        * Enter = view details (SSID, BSSID)
+        * D = NUKE THE LOOT - scorched earth, rm -rf /handshakes/*
+
+    File format breakdown:
+
+        +-------------------+---------------------------------------+
+        | Extension         | What it is                            |
+        +-------------------+---------------------------------------+
+        | .pcap             | Raw packets - for Wireshark nerds     |
+        | _hs.22000         | Hashcat EAPOL (WPA*02) - full shake   |
+        | .22000            | Hashcat PMKID (WPA*01) - clientless   |
+        | _ssid.txt         | SSID companion file (human readable)  |
+        +-------------------+---------------------------------------+
+
+    PMKID captures are nice when they work. Not all APs cough one up.
+    Zero PMKIDs (empty KDEs) are automatically filtered - if the pig
+    says it caught a PMKID, it's a real one worth cracking.
 
 
 ----[ 3.6 - Machine Learning
