@@ -836,8 +836,8 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
         if (!pendingNetworkAdd) {
             memcpy(&pendingNetwork, &net, sizeof(DetectedNetwork));
             
-            // Queue mood event data
-            strncpy(pendingNetworkSSID, net.ssid[0] ? net.ssid : "<hidden>", 32);
+            // Queue mood event data - pass empty string for hidden networks so XP system tracks ghosts
+            strncpy(pendingNetworkSSID, net.ssid, 32);
             pendingNetworkSSID[32] = 0;
             pendingNetworkRSSI = net.rssi;
             pendingNetworkChannel = net.channel;
