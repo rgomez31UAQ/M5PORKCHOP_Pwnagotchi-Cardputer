@@ -2157,6 +2157,17 @@ bool OinkMode::excludeNetwork(int index) {
     boarBros[bssid] = ssid;
     saveBoarBros();
     
+    // If this was the current attack target, abort the attack immediately
+    if (targetIndex == index) {
+        deauthing = false;
+        channelHopping = true;
+        targetIndex = -1;
+        memset(targetBssid, 0, 6);
+        autoState = AutoState::NEXT_TARGET;
+        stateStartTime = millis();
+        Serial.println("[OINK] Aborted attack on excluded network");
+    }
+    
     Serial.printf("[OINK] Added BOAR BRO: %s (new mapSize=%d)\n", ssid.c_str(), (int)boarBros.size());
     return true;
 }

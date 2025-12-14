@@ -1,6 +1,7 @@
 // HOG ON SPECTRUM Mode - WiFi Spectrum Analyzer Implementation
 
 #include "spectrum.h"
+#include "oink.h"
 #include "../core/config.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/xp.h"
@@ -193,13 +194,16 @@ void SpectrumMode::draw(M5Canvas& canvas) {
         canvas.setTextColor(COLOR_FG);
         canvas.setTextDatum(top_left);
         
-        // Build status string: [VULN!] and/or [DEAUTH]
+        // Build status string: [VULN!] and/or [DEAUTH] and/or [BRO]
         String status = "";
         if (isVulnerable(net.authmode)) {
             status += "[VULN!]";
         }
         if (!net.hasPMF) {
             status += "[DEAUTH]";
+        }
+        if (OinkMode::isExcluded(net.bssid)) {
+            status += "[BRO]";
         }
         if (status.length() > 0) {
             canvas.drawString(status, SPECTRUM_LEFT + 2, SPECTRUM_TOP);
