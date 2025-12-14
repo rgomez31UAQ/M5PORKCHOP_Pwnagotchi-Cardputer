@@ -237,8 +237,8 @@ void Display::drawTopBar() {
     else moodLabel = "S4D";
     modeStr += " " + moodLabel;
     
-    // Append PWNED banner if active (only in OINK mode)
-    if (mode == PorkchopMode::OINK_MODE && lootSSID.length() > 0 && millis() < lootDisplayUntil) {
+    // Append PWNED banner if active (only in OINK mode, persists until reboot)
+    if (mode == PorkchopMode::OINK_MODE && lootSSID.length() > 0) {
         modeStr += " PWNED " + lootSSID;
     }
     
