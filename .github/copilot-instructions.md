@@ -240,11 +240,22 @@ Distributed WPA/WPA2 password cracking via wpa-sec.stanev.org. Upload captured h
 
 ### API Endpoints
 - **Host**: `wpa-sec.stanev.org` (HTTPS port 443)
-- **GET results**: `/?api&key=<32-char-hex-key>` - Returns `BSSID:SSID:password` lines
+- **GET results**: `/?api&key=<32-char-hex-key>` - Returns potfile format lines
 - **POST upload**: `/?submit` with `Cookie: key=<key>` - Multipart form upload of .pcap
 
+### Potfile Format
+WPA-SEC returns results in potfile format:
+```
+BSSID:CLIENT_MAC:SSID:PASSWORD
+e848b8f87e98:809d6557b0be:pxs.pl_4586:79768559
+```
+- BSSID: 12 hex chars, no colons
+- CLIENT_MAC: 12 hex chars, no colons (ignored by us)
+- SSID: network name (may contain colons)
+- PASSWORD: after the last colon
+
 ### Local Cache Files (SD card)
-- `/wpasec_results.txt` - Cached cracked passwords (`BSSID:SSID:password` format)
+- `/wpasec_results.txt` - Cached cracked passwords (`BSSID:SSID:password` format, our simplified storage)
 - `/wpasec_uploaded.txt` - List of uploaded BSSIDs (one per line, no colons)
 - `/wpasec_key.txt` - Key import file (auto-deleted after import)
 
@@ -280,16 +291,17 @@ All BSSID lookups normalize to uppercase, no colons:
 ```cpp
 String WPASec::normalizeBSSID(const char* bssid) {
     // "AA:BB:CC:DD:EE:FF" -> "AABBCCDDEEFF"
+    // "aabbccddeeff" -> "AABBCCDDEEFF"
 }
 ```
 
 ### Response Parsing
-WPA-SEC returns `BSSID:SSID:password` but SSID/password may contain colons:
 ```cpp
-// Parse strategy:
-// 1. Find last colon -> password is after it
-// 2. Count 5 colons from start -> that's the BSSID end
-// 3. SSID is everything between BSSID and password
+// Parse potfile format: BSSID:CLIENT_MAC:SSID:PASSWORD
+// 1. BSSID = first 12 chars (hex, no colons)
+// 2. Skip CLIENT_MAC (chars 13-24 after first colon)
+// 3. SSID = everything between second colon and last colon
+// 4. PASSWORD = after the last colon
 ```
 
 ## Build Commands

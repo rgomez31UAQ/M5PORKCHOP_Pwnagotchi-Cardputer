@@ -301,30 +301,49 @@ bool WPASec::fetchResults() {
         
         if (line.isEmpty()) continue;
         
-        // Parse BSSID:SSID:password
-        // BSSID is always first 17 chars (AA:BB:CC:DD:EE:FF) or 12 chars (AABBCCDDEEFF)
-        // Password is after the LAST colon
-        // SSID is everything between BSSID and password (may contain colons)
-        int lastColon = line.lastIndexOf(':');
-        if (lastColon < 12) continue;  // Invalid line
+        // Parse WPA-SEC potfile format: BSSID:CLIENT_MAC:SSID:PASSWORD
+        // Example: e848b8f87e98:809d6557b0be:pxs.pl_4586:79768559
+        // BSSID = 12 hex chars (no colons in potfile format)
+        // CLIENT_MAC = 12 hex chars (we ignore this)
+        // SSID = network name (may contain colons)
+        // PASSWORD = after the last colon
         
-        String password = line.substring(lastColon + 1);
-        String bssidAndSsid = line.substring(0, lastColon);
+        // Potfile BSSIDs are 12 chars without colons
+        if (line.length() < 28) continue;  // At minimum: 12 + 1 + 12 + 1 + 1 + 1 = 28
         
-        // Find where BSSID ends - it's either 17 chars (with colons) or we find 5th colon
-        int colonCount = 0;
-        int bssidEnd = 0;
-        for (int i = 0; i < (int)bssidAndSsid.length() && colonCount < 5; i++) {
-            if (bssidAndSsid[i] == ':') colonCount++;
-            if (colonCount == 5) { bssidEnd = i; break; }
+        // Extract BSSID (first 12 chars)
+        String bssid = line.substring(0, 12);
+        
+        // Verify it looks like a hex BSSID
+        bool validBssid = true;
+        for (int i = 0; i < 12; i++) {
+            char c = bssid[i];
+            if (!isxdigit(c)) { validBssid = false; break; }
         }
+        if (!validBssid) continue;
         
-        if (bssidEnd == 0 || bssidEnd >= (int)bssidAndSsid.length() - 1) continue;
+        // Check for colon after BSSID
+        if (line[12] != ':') continue;
         
-        String bssid = bssidAndSsid.substring(0, bssidEnd);
-        String ssid = bssidAndSsid.substring(bssidEnd + 1);
+        // Skip CLIENT_MAC (next 12 chars after colon)
+        if (line.length() < 26 || line[25] != ':') continue;
+        
+        // Everything after CLIENT_MAC colon is SSID:PASSWORD
+        String ssidAndPass = line.substring(26);
+        
+        // Password is after the LAST colon
+        int lastColon = ssidAndPass.lastIndexOf(':');
+        if (lastColon < 1) continue;  // Need at least 1 char for SSID
+        
+        String ssid = ssidAndPass.substring(0, lastColon);
+        String password = ssidAndPass.substring(lastColon + 1);
+        
+        if (password.isEmpty()) continue;
         
         String bssidKey = normalizeBSSID(bssid.c_str());
+        
+        Serial.printf("[WPASEC] Parsed: BSSID=%s SSID=%s PASS=%s\n", 
+                      bssidKey.c_str(), ssid.c_str(), password.c_str());
         
         // Check if this is new
         if (crackedCache.find(bssidKey) == crackedCache.end()) {
