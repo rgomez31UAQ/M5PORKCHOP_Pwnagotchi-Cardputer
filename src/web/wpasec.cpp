@@ -116,7 +116,8 @@ bool WPASec::loadCache() {
     }
     
     // Format: BSSID:SSID:password (one per line)
-    while (f.available()) {
+    // Cap at 500 entries to prevent memory exhaustion
+    while (f.available() && crackedCache.size() < 500) {
         String line = f.readStringUntil('\n');
         line.trim();
         if (line.isEmpty()) continue;
@@ -173,7 +174,8 @@ bool WPASec::loadUploadedList() {
     File f = SD.open(UPLOADED_FILE, FILE_READ);
     if (!f) return false;
     
-    while (f.available()) {
+    // Cap at 500 entries to prevent memory exhaustion
+    while (f.available() && uploadedCache.size() < 500) {
         String line = f.readStringUntil('\n');
         line.trim();
         if (!line.isEmpty()) {
