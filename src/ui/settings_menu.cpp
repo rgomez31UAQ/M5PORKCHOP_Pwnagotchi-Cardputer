@@ -69,8 +69,9 @@ void SettingsMenu::loadFromConfig() {
     });
     
     // WiGLE API Name display (masked)
-    String wigleNameStatus = Config::wifi().wigleApiName.isEmpty() ? "(not set)" : 
-        Config::wifi().wigleApiName.substring(0, 3) + "...";
+    String wigleName = Config::wifi().wigleApiName;
+    String wigleNameStatus = wigleName.isEmpty() ? "(not set)" : 
+        wigleName.substring(0, min((unsigned int)3, wigleName.length())) + "...";
     items.push_back({
         "WiGLE Name",
         SettingType::TEXT,
@@ -80,9 +81,16 @@ void SettingsMenu::loadFromConfig() {
     });
     
     // WiGLE API Token display (masked)
-    String wigleTokenStatus = Config::wifi().wigleApiToken.isEmpty() ? "(not set)" : 
-        Config::wifi().wigleApiToken.substring(0, 4) + "..." + 
-        Config::wifi().wigleApiToken.substring(Config::wifi().wigleApiToken.length() - 4);
+    String wigleToken = Config::wifi().wigleApiToken;
+    String wigleTokenStatus;
+    if (wigleToken.isEmpty()) {
+        wigleTokenStatus = "(not set)";
+    } else if (wigleToken.length() < 8) {
+        wigleTokenStatus = wigleToken.substring(0, 2) + "...";
+    } else {
+        wigleTokenStatus = wigleToken.substring(0, 4) + "..." + 
+            wigleToken.substring(wigleToken.length() - 4);
+    }
     items.push_back({
         "WiGLE Token",
         SettingType::TEXT,
