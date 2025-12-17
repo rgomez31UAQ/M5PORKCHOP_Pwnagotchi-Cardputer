@@ -307,7 +307,8 @@
         
         Controls:
         * [U] Upload selected file to wigle.net
-        * [R] Refresh file list  
+        * [R] Refresh file list
+        * [D] Nuke selected track (deletes file, no undo)
         * [Enter] Show file details
         * [`] Exit back to menu
         
@@ -555,26 +556,44 @@
     Level up and you'll see that popup. Your pig has opinions about
     your achievements. Embrace them.
 
-    XP values - what makes the pig happy:
+    XP values - the complete dopamine schedule:
 
-        +------------------------+--------+
-        | Event                  | XP     |
-        +------------------------+--------+
-        | Network discovered     | 1      |
-        | Hidden SSID found      | 3      |
-        | Open network (lol)     | 3      |
-        | WPA3 network spotted   | 10     |
-        | Handshake captured     | 50     |
-        | PMKID yoinked          | 75     |
-        | Deauth success         | 15     |
-        | AP logged with GPS     | 2      |
-        | 1km wardriving         | 25     |
-        | GPS lock acquired      | 5      |
-        | BLE spam burst         | 2      |
-        | 30min session          | 10     |
-        | 1hr session            | 25     |
-        | 2hr session (touch grass) | 50  |
-        +------------------------+--------+
+        +----------------------------+--------+
+        | Event                      | XP     |
+        +----------------------------+--------+
+        | Network discovered         | 1      |
+        | Hidden SSID found          | 3      |
+        | Open network (lol)         | 3      |
+        | WEP network (ancient relic)| 5      |
+        | WPA3 network spotted       | 10     |
+        +----------------------------+--------+
+        | Handshake captured         | 50     |
+        | PMKID yoinked              | 75     |
+        | Passive PMKID (ghost mode) | 100    |
+        | Low battery capture (<10%) | +20    |
+        +----------------------------+--------+
+        | Deauth frame sent          | 2      |
+        | Deauth success (reconnect) | 15     |
+        +----------------------------+--------+
+        | AP logged with GPS         | 2      |
+        | 1km wardriving             | 25     |
+        | GPS lock acquired          | 5      |
+        +----------------------------+--------+
+        | BLE spam burst             | 2      |
+        | BLE Apple hit              | 3      |
+        | BLE Android hit            | 2      |
+        | BLE Samsung hit            | 2      |
+        | BLE Windows hit            | 2      |
+        +----------------------------+--------+
+        | ML rogue AP detected       | 25     |
+        +----------------------------+--------+
+        | BOAR BRO added             | 5      |
+        | Mid-attack mercy (B key)   | 15     |
+        +----------------------------+--------+
+        | 30min session              | 10     |
+        | 1hr session                | 25     |
+        | 2hr session (touch grass)  | 50     |
+        +----------------------------+--------+
 
     Top tier ranks reference hacker legends and grindhouse cinema. If
     you hit level 40 and don't recognize the name, you've got homework.
@@ -882,7 +901,7 @@
         | ML Mode    | Basic/Enhanced beacon capture | Basic   |
         | SD Log     | Debug logging to SD card      | OFF     |
         | BLE Burst  | BLE advertisement interval    | 200ms   |
-        | BLE Adv    | Per-packet duration           | 100ms   |
+        | BLE Adv Tm | Per-packet duration           | 100ms   |
         +------------+-------------------------------+---------+
 
     GPS pin defaults work for original Cardputer + Grove GPS. If you're
@@ -894,7 +913,7 @@
 ----[ 7.1 - Color Themes
 
     Your piglet isn't locked to pink. Cycle through themes with ; and .
-    on the Theme setting. 10 options, from tactical to absurd:
+    on the Theme setting. 12 flavors, from tactical to absurd:
 
         +------------+--------------------------------------------+
         | Theme      | Vibe                                       |
@@ -910,9 +929,6 @@
         | BUBBLEGUM  | Hot pink on white. Aggressively visible    |
         | M1NT       | Teal on white. Refreshing. Minty.          |
         | SUNBURN    | Orange on white. Eye damage included       |
-        +------------+--------------------------------------------+
-        | L1TTL3M1XY | OG Game Boy LCD. 1989 pea-soup nostalgia   |
-        | B4NSH33    | P1 phosphor green. VT100 ghost vibes       |
         +------------+--------------------------------------------+
         | L1TTL3M1XY | OG Game Boy LCD. 1989 pea-soup nostalgia   |
         | B4NSH33    | P1 phosphor green. VT100 ghost vibes       |
