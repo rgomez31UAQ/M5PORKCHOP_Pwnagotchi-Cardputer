@@ -36,6 +36,8 @@ void CapturesMenu::show() {
 
 void CapturesMenu::hide() {
     active = false;
+    captures.clear();
+    captures.shrink_to_fit();  // Release vector memory
 }
 
 void CapturesMenu::scanCaptures() {

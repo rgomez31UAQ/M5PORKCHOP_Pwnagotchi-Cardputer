@@ -107,6 +107,7 @@ void LogViewer::show() {
 void LogViewer::hide() {
     active = false;
     logLines.clear();
+    logLines.shrink_to_fit();  // Release vector memory
 }
 
 void LogViewer::render() {

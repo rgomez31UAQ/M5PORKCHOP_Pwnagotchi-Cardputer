@@ -34,6 +34,8 @@ void BoarBrosMenu::show() {
 void BoarBrosMenu::hide() {
     active = false;
     deleteConfirmActive = false;
+    bros.clear();
+    bros.shrink_to_fit();  // Release vector memory
 }
 
 void BoarBrosMenu::loadBros() {

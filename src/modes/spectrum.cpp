@@ -72,6 +72,7 @@ uint32_t SpectrumMode::firstDeauthTime = 0;
 
 void SpectrumMode::init() {
     networks.clear();
+    networks.shrink_to_fit();  // Release vector capacity
     viewCenterMHz = DEFAULT_CENTER_MHZ;
     viewWidthMHz = DEFAULT_WIDTH_MHZ;
     selectedIndex = -1;
@@ -134,6 +135,9 @@ void SpectrumMode::stop() {
     
     Serial.println("[SPECTRUM] Stopping...");
     
+    // Block callback during shutdown sequence
+    busy = true;
+    
     // [P4] Ensure monitoring is disabled
     monitoringNetwork = false;
     
@@ -142,6 +146,7 @@ void SpectrumMode::stop() {
     running = false;
     Display::setWiFiStatus(false);
     
+    busy = false;
     Serial.printf("[SPECTRUM] Stopped - tracked %d networks\n", networks.size());
 }
 
@@ -179,6 +184,9 @@ void SpectrumMode::update() {
         }
         
         if (networkLost) {
+            // Block callback during exit sequence (has delays)
+            busy = true;
+            
             // Two descending beeps for signal lost
             if (Config::personality().soundEnabled) {
                 M5.Speaker.tone(800, 100);
@@ -187,6 +195,8 @@ void SpectrumMode::update() {
             }
             Display::showToast("Signal lost");
             delay(300);  // Brief pause so user sees toast
+            
+            busy = false;
             exitClientMonitor();
         }
     }
@@ -1192,10 +1202,19 @@ int SpectrumMode::getClientCount() {
 
 // Show client detail popup [P3] [P9]
 void SpectrumMode::deauthClient(int idx) {
+    // Block callback during deauth sequence (has delays)
+    busy = true;
+    
     // Bounds check [P3]
     if (monitoredNetworkIndex < 0 || 
-        monitoredNetworkIndex >= (int)networks.size()) return;
-    if (idx < 0 || idx >= networks[monitoredNetworkIndex].clientCount) return;
+        monitoredNetworkIndex >= (int)networks.size()) {
+        busy = false;
+        return;
+    }
+    if (idx < 0 || idx >= networks[monitoredNetworkIndex].clientCount) {
+        busy = false;
+        return;
+    }
     
     const SpectrumNetwork& net = networks[monitoredNetworkIndex];
     const SpectrumClient& client = net.clients[idx];
@@ -1257,4 +1276,6 @@ void SpectrumMode::deauthClient(int idx) {
             XP::unlockAchievement(ACH_QUICK_DRAW);
         }
     }
+    
+    busy = false;
 }
