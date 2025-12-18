@@ -241,22 +241,22 @@ void SettingsMenu::loadFromConfig() {
         "Match your GPS module"
     });
     
-    // GPS RX Pin (G1 for Grove, G13 for Cap LoRa868)
+    // GPS RX Pin (G1 for Grove, G15 for Cap LoRa868)
     items.push_back({
         "GPS RX Pin",
         SettingType::VALUE,
         (int)Config::gps().rxPin,
         1, 46, 1, "", "",
-        "G1=Grove, G13=LoRaCap"
+        "G1=Grove, G15=LoRaCap"
     });
     
-    // GPS TX Pin (G2 for Grove, G15 for Cap LoRa868)
+    // GPS TX Pin (G2 for Grove, G13 for Cap LoRa868)
     items.push_back({
         "GPS TX Pin",
         SettingType::VALUE,
         (int)Config::gps().txPin,
         1, 46, 1, "", "",
-        "G2=Grove, G15=LoRaCap"
+        "G2=Grove, G13=LoRaCap"
     });
     
     // Timezone offset (UTC-12 to UTC+14)
