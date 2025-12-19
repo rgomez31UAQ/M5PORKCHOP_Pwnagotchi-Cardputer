@@ -67,7 +67,7 @@ public:
     static uint8_t getDeauthJitterMax();      // Base 5ms, modified by debuffs
     static uint16_t getChannelHopInterval();  // Base from config, modified
     static float getXPMultiplier();           // 1.0 base, modified
-    static uint32_t getLockTime();            // Base 3000ms, modified by class
+    static uint32_t getLockTime();            // Base 4000ms (configurable), modified by class
     static float getDistanceXPMultiplier();   // 1.0 base, modified by class
     static float getCaptureXPMultiplier();    // 1.0 base, modified by class
     

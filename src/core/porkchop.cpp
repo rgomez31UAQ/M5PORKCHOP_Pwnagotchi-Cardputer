@@ -404,7 +404,7 @@ void Porkchop::handleInput() {
         }
     }
     
-    // OINK mode - Backspace to stop and return to idle, E to exclude network
+    // OINK mode - Backspace to stop and return to idle, B to exclude network
     if (currentMode == PorkchopMode::OINK_MODE) {
         if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
             setMode(PorkchopMode::IDLE);

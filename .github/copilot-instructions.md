@@ -526,8 +526,13 @@ pio test -e native_coverage    # Run with coverage report
 test/
   test_beacon/test_beacon_parsing.cpp    # 802.11 beacon frame parsing
   test_classifier/test_heuristic_classifier.cpp  # ML anomaly scoring
+  test_classifier_scores/test_classifier_scores.cpp  # Classifier score tests
   test_distance/test_distance.cpp        # Haversine GPS distance
+  test_feature_vector/test_feature_vector.cpp  # ML feature vector tests
   test_features/test_feature_extraction.cpp  # ML feature helpers
+  test_mac_utils/test_mac_utils.cpp      # MAC address utilities
+  test_string_escape/test_string_escape.cpp  # CSV/string escaping
+  test_utils/test_utils.cpp              # General utility tests
   test_xp/test_xp_levels.cpp             # XP/leveling system
   mocks/                                 # Shared mock headers
 ```
@@ -1310,7 +1315,7 @@ Every 5 levels, players promote to a new class tier with permanent cumulative bu
 | 6-10 | SN1FF3R | P4CK3T NOSE: -10% channel hop interval |
 | 11-15 | PWNER | H4RD SNOUT: +1 deauth burst frame |
 | 16-20 | R00T | R04D H0G: +15% distance XP |
-| 21-25 | R0GU3 | SH4RP TUSKS: +1s lock time (3s→4s, better client discovery) |
+| 21-25 | R0GU3 | SH4RP TUSKS: +1s lock time (4s→5s, better client discovery) |
 | 26-30 | EXPL01T | CR4CK NOSE: +10% capture XP (HS/PMKID) |
 | 31-35 | WARL0RD | IR0N TUSKS: -1ms deauth jitter max |
 | 36-40 | L3G3ND | OMNI P0RK: +5% all effects |
@@ -1319,7 +1324,7 @@ Every 5 levels, players promote to a new class tier with permanent cumulative bu
 Has all 7 class buffs active simultaneously:
 - Channel hop: 500ms × 0.9 × 0.95 = 427ms
 - Deauth burst: 5 + 1 = 6 frames (then ×1.05 = 6)
-- Lock time: 3000ms + 1000ms = 4200ms (after ×1.05)
+- Lock time: 4000ms + 1000ms = 5250ms (after ×1.05)
 - Distance XP: base × 1.15 × 1.05 = 120% bonus
 - Capture XP: base × 1.10 × 1.05 = 115% bonus
 - Jitter max: 5 - 1 = 4ms
@@ -1513,7 +1518,7 @@ ACH_FIRST_BRO       = 1ULL << 53  // First network added to BOAR BROS
 ACH_FIVE_FAMILIES   = 1ULL << 54  // 5 bros added lifetime
 ACH_MERCY_MODE      = 1ULL << 55  // First mid-attack exclusion
 ACH_WITNESS_PROTECT = 1ULL << 56  // 25 bros added (unlocks P4C1F1ST_P0RK title)
-ACH_FULL_ROSTER     = 1ULL << 57  // 100 bros (max limit)
+ACH_FULL_ROSTER     = 1ULL << 57  // 50 bros (max limit)
 
 // Combined DO NO HAM + BOAR BROS achievements (bits 58-59)
 ACH_INNER_PEACE     = 1ULL << 58  // 1hr passive + 10 bros + 0 deauths this session
