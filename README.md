@@ -77,35 +77,51 @@
 
 --[ 1 - Introduction
 
-    Listen up. You're looking at PORKCHOP - a pocket-sized WiFi hunting
-    companion that lives in your M5Cardputer. Think pwnagotchi had a baby
-    with a tamagotchi, except this one oinks and has zero chill when it
-    catches a handshake.
+    you're looking at PORKCHOP - a pocket-sized WiFi hunting companion
+    that lives in your M5Cardputer. think pwnagotchi had a baby with a
+    tamagotchi, except this one oinks and has zero chill when it catches
+    a handshake.
     
-    The piglet personality isn't just for show. It reacts to what you're
+    the pig sniffs handshakes. the pig yoinks PMKIDs. the pig hunts 
+    individual devices and tracks their movement in real time. the pig
+    paints spectrum graphs with vulnerability indicators. the pig spams
+    BLE notifications to every phone in range. the pig has an XP system
+    with 40 ranks and 63 achievements because apparently we made an RPG.
+    
+    the piglet personality isn't just for show. it reacts to what you're
     doing - gets hyped when you pop a 4-way, goes tactical when you're
-    mapping the concrete jungle, annoys every phone in bluetooth range,
-    paints pretty pictures of RF interference, and gets sleepy when the
-    airwaves go quiet. Feed it handshakes and it'll love you forever.
+    mapping the concrete jungle, gets aggressive when deauthing clients,
+    and gets sleepy when the airwaves go quiet.
+    
+    wifi security awareness through an unhinged hacking tamagotchi.
+    this is what we do. this is PORKCHOP.
 
 
 --[ 2 - What the hell is this thing
 
-    PORKCHOP is built on the ESP32-S3 platform running on M5Cardputer
-    hardware. It's designed for:
+    PORKCHOP runs on M5Cardputer (ESP32-S3). 1.5MB binary. no bloat.
+    the pig knows what it is.
 
-        - Passive WiFi reconnaissance
-        - WPA/WPA2 handshake capture (PMKID yoink too)
-        - GPS-enabled wardriving
+        - passive WiFi reconnaissance (or not so passive. your call.)
+        - WPA/WPA2 handshake capture (4-way EAPOL reconstruction)
+        - PMKID yoink from M1 frames (clientless. surgical. quiet.)
+        - CLIENT MONITOR - track individual devices by signal strength
+        - proximity arrows show if target is walking toward or away from you
+        - targeted deauth - disconnect specific clients, not broadcast spam
+        - GPS-enabled wardriving with WiGLE export
         - BLE notification spam (Apple, Android, Samsung, Windows)
-        - Real-time 2.4GHz spectrum visualization
-        - ML-powered rogue AP detection
-        - Looking cute while doing questionable things
+        - real-time 2.4GHz spectrum visualization with vuln indicators
+        - ML-powered rogue AP detection (heuristic + Edge Impulse ready)
+        - RPG XP system - 40 ranks from BACON N00B to MUDGE UNCHA1NED
+        - 63 achievements because we have problems
+        - buff/debuff system based on mood and session performance
+        - looking cute while doing questionable things
 
-    Your digital companion reacts to discoveries like any good attack pet
-    should. Captures make it happy. BLE chaos makes it chatty. Spectrum
-    mode makes it analytical. Boredom makes it sad. It's basically you,
-    but as an ASCII pig.
+    your digital companion reacts to discoveries like any good attack pet
+    should. captures make it happy. hunting clients makes it aggressive.
+    spectrum mode makes it analytical. boredom makes it sad.
+    
+    it's basically you, but as an ASCII pig.
 
 
 --[ 3 - Capabilities
@@ -559,15 +575,40 @@
 
 ----[ 3.7 - Machine Learning
 
-    STATUS: EXPERIMENTAL. TRUST ISSUES AHEAD.
+    STATUS: DATA COLLECTION PHASE. THE PIG IS LEARNING. SLOWLY.
     
-    The heuristics run. The scaffold exists. The training pipeline works.
-    What's missing: enough labeled data to make the pig smart, and enough
-    hubris to ship it as "production ready." We have the second part.
-    Working on the first.
+    the model doesn't exist yet. the heuristics do. the scaffold is ready.
+    what's missing: your data. specifically, labeled beacon captures from
+    weird corners of the RF spectrum where evil twins and rogue APs live.
     
-    TL;DR: don't bet your pentest report on these classifications yet.
-    But feel free to collect data and help train the pig's brain.
+    we built the pipeline. we built the feature extractor. we built the
+    export format. now we need volunteers who enjoy walking around places
+    with questionable WiFi hygiene and pressing buttons on tiny keyboards.
+    
+    if you've ever wondered what that "Free_Airport_WiFi" actually is,
+    or why your neighbor's "xfinitywifi" has -25dBm signal strength,
+    or why there's a hidden SSID in your office that nobody admits to -
+    congratulations. you're our target demographic.
+    
+    WARHOG mode exports ML training data automatically when Enhanced mode
+    is enabled. walk around. let the pig sniff. upload your .ml.csv files.
+    the more weird APs we see, the smarter the pig gets. eventually.
+    
+    current status:
+    
+        [X] 32-feature vector extraction from beacon frames
+        [X] heuristic classifier (catches obvious stuff)
+        [X] Edge Impulse scaffold (ready for real model)
+        [X] ML training data export in WARHOG mode
+        [ ] actual trained model (need more data)
+        [ ] production-ready confidence (need more hubris)
+    
+    we have the hubris. working on the data. help a pig out.
+    
+    want to contribute? enable Enhanced ML mode, go wardriving, export
+    your ml_training_*.ml.csv files. label any interesting APs you find.
+    open an issue or PR with your samples. the pig will remember you
+    when it becomes sentient.
 
     Here's what we're building toward - the ML system extracts
     32 features from every beacon frame:
@@ -585,8 +626,8 @@
         [!] VULNERABLE  - Open/WEP/WPA1/WPS - security from 2004
         [!] DEAUTH_TGT  - No WPA3, no PMF, no protection, no mercy
 
-    Want real ML? Train your own model on Edge Impulse and drop it in.
-    The scaffold is ready.
+    Want real ML inference on-device? Train your own model on Edge Impulse
+    and drop it in. The scaffold is ready. The pig is waiting.
 
 
 ----[ 3.8 - Enhanced ML Mode
