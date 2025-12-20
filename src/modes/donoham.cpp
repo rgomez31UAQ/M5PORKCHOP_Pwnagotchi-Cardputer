@@ -46,6 +46,22 @@ struct PendingPMKIDCreate {
 };
 static PendingPMKIDCreate pendingPMKIDCreate;
 
+// Single-slot deferred handshake frame add
+static volatile bool pendingHandshakeAdd = false;
+static volatile bool pendingHandshakeBusy = false;
+struct PendingHandshakeFrame {
+    uint8_t bssid[6];
+    uint8_t station[6];
+    uint8_t messageNum;
+    uint8_t frameData[512];
+    uint16_t frameLen;
+};
+static PendingHandshakeFrame pendingHandshake;
+
+// Handshake capture event for UI
+static volatile bool pendingHandshakeCapture = false;
+static char pendingHandshakeSSID[33] = {0};
+
 // Channel order: 1, 6, 11 first (non-overlapping), then fill in
 static const uint8_t CHANNEL_ORDER[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
 
@@ -86,6 +102,9 @@ void DoNoHamMode::start() {
     pendingNetworkAdd = false;
     pendingPMKIDCreateReady = false;
     pendingPMKIDCreateBusy = false;
+    pendingHandshakeAdd = false;
+    pendingHandshakeBusy = false;
+    pendingHandshakeCapture = false;
     
     // Randomize MAC if configured
     if (Config::wifi().randomizeMAC) {
@@ -141,6 +160,9 @@ void DoNoHamMode::startSeamless() {
     pendingNetworkAdd = false;
     pendingPMKIDCreateReady = false;
     pendingPMKIDCreateBusy = false;
+    pendingHandshakeAdd = false;
+    pendingHandshakeBusy = false;
+    pendingHandshakeCapture = false;
     
     running = true;
     
@@ -179,6 +201,9 @@ void DoNoHamMode::stop() {
     pendingNetworkAdd = false;
     pendingPMKIDCreateReady = false;
     pendingPMKIDCreateBusy = false;
+    pendingHandshakeAdd = false;
+    pendingHandshakeBusy = false;
+    pendingHandshakeCapture = false;
     
     Serial.println("[DNH] Stopped");
 }
@@ -285,6 +310,62 @@ void DoNoHamMode::update() {
                 dwellResolved = false;
             }
         }
+    }
+    
+    // Process deferred handshake frame add
+    if (pendingHandshakeAdd && !pendingHandshakeBusy) {
+        pendingHandshakeBusy = true;
+        
+        // Find or create handshake entry
+        int hsIdx = findOrCreateHandshake(pendingHandshake.bssid, pendingHandshake.station);
+        if (hsIdx >= 0) {
+            CapturedHandshake& hs = handshakes[hsIdx];
+            uint8_t frameIdx = pendingHandshake.messageNum - 1;
+            
+            // Store frame data
+            uint16_t copyLen = min((uint16_t)512, pendingHandshake.frameLen);
+            memcpy(hs.frames[frameIdx].data, pendingHandshake.frameData, copyLen);
+            hs.frames[frameIdx].len = copyLen;
+            hs.frames[frameIdx].messageNum = pendingHandshake.messageNum;
+            hs.frames[frameIdx].timestamp = now;
+            
+            // Update mask
+            hs.capturedMask |= (1 << frameIdx);
+            hs.lastSeen = now;
+            
+            // Check if we just completed a valid pair
+            if (hs.hasValidPair() && !hs.saved && !pendingHandshakeCapture) {
+                // Look up SSID if missing
+                if (hs.ssid[0] == 0) {
+                    int netIdx = findNetwork(hs.bssid);
+                    if (netIdx >= 0 && networks[netIdx].ssid[0] != 0) {
+                        strncpy(hs.ssid, networks[netIdx].ssid, 32);
+                        hs.ssid[32] = 0;
+                    }
+                }
+                
+                strncpy(pendingHandshakeSSID, hs.ssid, 32);
+                pendingHandshakeSSID[32] = 0;
+                pendingHandshakeCapture = true;
+                
+                Serial.printf("[DNH] Handshake complete: %s (M%d captured)\n", 
+                    hs.ssid[0] ? hs.ssid : "?", pendingHandshake.messageNum);
+            }
+        }
+        
+        pendingHandshakeAdd = false;
+        pendingHandshakeBusy = false;
+    }
+    
+    // Process handshake capture event (UI update)
+    if (pendingHandshakeCapture) {
+        Display::showToast("GHOST HS!");
+        M5.Speaker.tone(880, 100);
+        delay(50);
+        M5.Speaker.tone(1320, 100);
+        XP::addXP(XPEvent::HANDSHAKE_CAPTURED);
+        Mood::onHandshakeCaptured();
+        pendingHandshakeCapture = false;
     }
     
     // Channel hopping state machine
@@ -424,8 +505,121 @@ void DoNoHamMode::saveAllPMKIDs() {
 }
 
 void DoNoHamMode::saveAllHandshakes() {
-    // TODO: Implement handshake saving to SD card
-    // Format: hashcat 22000 WPA*02 format
+    // Save handshakes in hashcat 22000 format (WPA*02)
+    for (auto& hs : handshakes) {
+        if (hs.saved) continue;
+        if (!hs.hasValidPair()) continue;  // Need M1+M2 or M2+M3
+        
+        // Try to backfill SSID if missing
+        if (hs.ssid[0] == 0) {
+            int netIdx = findNetwork(hs.bssid);
+            if (netIdx >= 0 && networks[netIdx].ssid[0] != 0) {
+                strncpy(hs.ssid, networks[netIdx].ssid, 32);
+                hs.ssid[32] = 0;
+            }
+        }
+        
+        // Can only save if we have SSID
+        if (hs.ssid[0] == 0) continue;
+        
+        // Determine message pair
+        uint8_t msgPair = hs.getMessagePair();
+        if (msgPair == 0xFF) continue;
+        
+        // Get frames
+        const EAPOLFrame* nonceFrame = nullptr;
+        const EAPOLFrame* eapolFrame = nullptr;
+        
+        if (msgPair == 0x00) {
+            nonceFrame = &hs.frames[0];  // M1
+            eapolFrame = &hs.frames[1];  // M2
+        } else {
+            nonceFrame = &hs.frames[2];  // M3
+            eapolFrame = &hs.frames[1];  // M2
+        }
+        
+        if (nonceFrame->len < 51 || eapolFrame->len < 95) continue;
+        
+        // Build filename: /handshakes/BSSID_hs.22000
+        char filename[64];
+        snprintf(filename, sizeof(filename), "/handshakes/%02X%02X%02X%02X%02X%02X_hs.22000",
+            hs.bssid[0], hs.bssid[1], hs.bssid[2], hs.bssid[3], hs.bssid[4], hs.bssid[5]);
+        
+        // Ensure directory exists
+        if (!SD.exists("/handshakes")) {
+            SD.mkdir("/handshakes");
+        }
+        
+        File f = SD.open(filename, FILE_WRITE);
+        if (!f) {
+            Serial.printf("[DNH] Failed to create handshake file: %s\n", filename);
+            continue;
+        }
+        
+        // Extract MIC from M2 (offset 81, 16 bytes)
+        char micHex[33];
+        for (int i = 0; i < 16; i++) {
+            sprintf(micHex + i*2, "%02x", eapolFrame->data[81 + i]);
+        }
+        
+        // MAC_AP
+        char macAP[13];
+        sprintf(macAP, "%02x%02x%02x%02x%02x%02x",
+            hs.bssid[0], hs.bssid[1], hs.bssid[2],
+            hs.bssid[3], hs.bssid[4], hs.bssid[5]);
+        
+        // MAC_CLIENT
+        char macClient[13];
+        sprintf(macClient, "%02x%02x%02x%02x%02x%02x",
+            hs.station[0], hs.station[1], hs.station[2],
+            hs.station[3], hs.station[4], hs.station[5]);
+        
+        // ESSID (hex-encoded)
+        char essidHex[65];
+        int ssidLen = strlen(hs.ssid);
+        for (int i = 0; i < ssidLen && i < 32; i++) {
+            sprintf(essidHex + i*2, "%02x", (uint8_t)hs.ssid[i]);
+        }
+        essidHex[ssidLen * 2] = 0;
+        
+        // ANonce from M1 or M3 (offset 17, 32 bytes)
+        char nonceHex[65];
+        for (int i = 0; i < 32; i++) {
+            sprintf(nonceHex + i*2, "%02x", nonceFrame->data[17 + i]);
+        }
+        
+        // EAPOL frame with MIC zeroed
+        uint16_t eapolLen = (eapolFrame->data[2] << 8) | eapolFrame->data[3];
+        eapolLen += 4;
+        if (eapolLen > eapolFrame->len) eapolLen = eapolFrame->len;
+        
+        char* eapolHex = (char*)malloc(eapolLen * 2 + 1);
+        if (!eapolHex) {
+            f.close();
+            continue;
+        }
+        
+        // Copy and zero MIC
+        uint8_t eapolCopy[512];
+        memcpy(eapolCopy, eapolFrame->data, eapolLen);
+        memset(eapolCopy + 81, 0, 16);
+        
+        for (int i = 0; i < eapolLen; i++) {
+            sprintf(eapolHex + i*2, "%02x", eapolCopy[i]);
+        }
+        eapolHex[eapolLen * 2] = 0;
+        
+        // WPA*02*MIC*MAC_AP*MAC_CLIENT*ESSID*ANONCE*EAPOL*MESSAGEPAIR
+        f.printf("WPA*02*%s*%s*%s*%s*%s*%s*%02x\n",
+            micHex, macAP, macClient, essidHex, nonceHex, eapolHex, msgPair);
+        
+        free(eapolHex);
+        f.close();
+        
+        hs.saved = true;
+        Serial.printf("[DNH] Handshake saved: %s\n", filename);
+        SDLog::log("DNH", "Handshake saved: %s (%s)", hs.ssid, filename);
+    }
 }
 
 int DoNoHamMode::findNetwork(const uint8_t* bssid) {
@@ -450,6 +644,31 @@ int DoNoHamMode::findOrCreatePMKID(const uint8_t* bssid) {
         memcpy(p.bssid, bssid, 6);
         pmkids.push_back(p);
         return pmkids.size() - 1;
+    }
+    return -1;
+}
+
+int DoNoHamMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station) {
+    // Find existing with matching BSSID and station
+    for (size_t i = 0; i < handshakes.size(); i++) {
+        if (memcmp(handshakes[i].bssid, bssid, 6) == 0 &&
+            memcmp(handshakes[i].station, station, 6) == 0) {
+            return i;
+        }
+    }
+    // Create new
+    if (handshakes.size() < DNH_MAX_HANDSHAKES) {
+        CapturedHandshake hs = {};
+        memcpy(hs.bssid, bssid, 6);
+        memcpy(hs.station, station, 6);
+        hs.capturedMask = 0;
+        hs.firstSeen = millis();
+        hs.lastSeen = hs.firstSeen;
+        hs.saved = false;
+        hs.beaconData = nullptr;
+        hs.beaconLen = 0;
+        handshakes.push_back(hs);
+        return handshakes.size() - 1;
     }
     return -1;
 }
@@ -595,70 +814,88 @@ void DoNoHamMode::handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi) {
     else if (keyAck && keyMic && secure) messageNum = 3;
     else if (!keyAck && keyMic && secure) messageNum = 4;
     
-    // We only care about M1 for PMKID
-    if (messageNum != 1) return;
+    if (messageNum == 0) return;  // Unknown message type
     
-    // Determine BSSID and station from M1 (AP->Station)
+    // Determine BSSID and station based on message direction
+    // M1/M3 = AP->Station, M2/M4 = Station->AP
     uint8_t apBssid[6], station[6];
-    memcpy(apBssid, srcMac, 6);
-    memcpy(station, dstMac, 6);
+    if (messageNum == 1 || messageNum == 3) {
+        memcpy(apBssid, srcMac, 6);
+        memcpy(station, dstMac, 6);
+    } else {
+        memcpy(apBssid, dstMac, 6);
+        memcpy(station, srcMac, 6);
+    }
     
     // ========== PMKID EXTRACTION FROM M1 ==========
-    // Descriptor type 0x02 = RSN (WPA2/WPA3), 0xFE = WPA1
-    uint8_t descriptorType = eapol[4];
-    if (descriptorType != 0x02) return;  // WPA1 doesn't have PMKID
-    
-    // Key data length at offset 97-98, key data at 99
-    if (eapolLen < 121) return;  // Need at least 99 + 22 bytes
-    
-    uint16_t keyDataLen = (eapol[97] << 8) | eapol[98];
-    if (keyDataLen < 22 || eapolLen < 99 + keyDataLen) return;
-    
-    const uint8_t* keyData = eapol + 99;
-    
-    // Search for PMKID KDE: dd 14 00 0f ac 04 [16-byte PMKID]
-    for (uint16_t i = 0; i + 22 <= keyDataLen; i++) {
-        if (keyData[i] == 0xdd && keyData[i+1] == 0x14 &&
-            keyData[i+2] == 0x00 && keyData[i+3] == 0x0f &&
-            keyData[i+4] == 0xac && keyData[i+5] == 0x04) {
-            
-            const uint8_t* pmkidData = keyData + i + 6;
-            
-            // Skip all-zero PMKIDs (invalid)
-            bool allZeros = true;
-            for (int z = 0; z < 16; z++) {
-                if (pmkidData[z] != 0) { allZeros = false; break; }
-            }
-            if (allZeros) {
-                Serial.println("[DNH] PMKID KDE found but all zeros (ignored)");
-                break;
-            }
-            
-            // Queue PMKID for creation in main thread
-            if (!pendingPMKIDCreateBusy && !pendingPMKIDCreateReady) {
-                memcpy(pendingPMKIDCreate.bssid, apBssid, 6);
-                memcpy(pendingPMKIDCreate.station, station, 6);
-                memcpy(pendingPMKIDCreate.pmkid, pmkidData, 16);
+    if (messageNum == 1) {
+        // Descriptor type 0x02 = RSN (WPA2/WPA3), 0xFE = WPA1
+        uint8_t descriptorType = eapol[4];
+        if (descriptorType == 0x02 && eapolLen >= 121) {  // WPA2/3 only
+            uint16_t keyDataLen = (eapol[97] << 8) | eapol[98];
+            if (keyDataLen >= 22 && eapolLen >= 99 + keyDataLen) {
+                const uint8_t* keyData = eapol + 99;
                 
-                // Try to get SSID from known networks
-                int netIdx = findNetwork(apBssid);
-                if (netIdx >= 0 && networks[netIdx].ssid[0] != 0) {
-                    strncpy(pendingPMKIDCreate.ssid, networks[netIdx].ssid, 32);
-                    pendingPMKIDCreate.ssid[32] = 0;
-                } else {
-                    // No SSID - trigger dwell to catch beacon
-                    pendingPMKIDCreate.ssid[0] = 0;
-                    state = DNHState::DWELLING;
-                    dwellStartTime = millis();
-                    dwellResolved = false;
-                    Serial.println("[DNH] PMKID needs SSID - dwelling for beacon");
+                // Search for PMKID KDE: dd 14 00 0f ac 04 [16-byte PMKID]
+                for (uint16_t i = 0; i + 22 <= keyDataLen; i++) {
+                    if (keyData[i] == 0xdd && keyData[i+1] == 0x14 &&
+                        keyData[i+2] == 0x00 && keyData[i+3] == 0x0f &&
+                        keyData[i+4] == 0xac && keyData[i+5] == 0x04) {
+                        
+                        const uint8_t* pmkidData = keyData + i + 6;
+                        
+                        // Skip all-zero PMKIDs (invalid)
+                        bool allZeros = true;
+                        for (int z = 0; z < 16; z++) {
+                            if (pmkidData[z] != 0) { allZeros = false; break; }
+                        }
+                        if (allZeros) {
+                            Serial.println("[DNH] PMKID KDE found but all zeros (ignored)");
+                            break;
+                        }
+                        
+                        // Queue PMKID for creation in main thread
+                        if (!pendingPMKIDCreateBusy && !pendingPMKIDCreateReady) {
+                            memcpy(pendingPMKIDCreate.bssid, apBssid, 6);
+                            memcpy(pendingPMKIDCreate.station, station, 6);
+                            memcpy(pendingPMKIDCreate.pmkid, pmkidData, 16);
+                            
+                            // Try to get SSID from known networks
+                            int netIdx = findNetwork(apBssid);
+                            if (netIdx >= 0 && networks[netIdx].ssid[0] != 0) {
+                                strncpy(pendingPMKIDCreate.ssid, networks[netIdx].ssid, 32);
+                                pendingPMKIDCreate.ssid[32] = 0;
+                            } else {
+                                // No SSID - trigger dwell to catch beacon
+                                pendingPMKIDCreate.ssid[0] = 0;
+                                state = DNHState::DWELLING;
+                                dwellStartTime = millis();
+                                dwellResolved = false;
+                                Serial.println("[DNH] PMKID needs SSID - dwelling for beacon");
+                            }
+                            
+                            pendingPMKIDCreateReady = true;
+                            Serial.printf("[DNH] PMKID queued from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                                apBssid[0], apBssid[1], apBssid[2], apBssid[3], apBssid[4], apBssid[5]);
+                        }
+                        break;  // Found PMKID, stop searching
+                    }
                 }
-                
-                pendingPMKIDCreateReady = true;
-                Serial.printf("[DNH] PMKID queued from %02X:%02X:%02X:%02X:%02X:%02X\n",
-                    apBssid[0], apBssid[1], apBssid[2], apBssid[3], apBssid[4], apBssid[5]);
             }
-            break;  // Found PMKID, stop searching
         }
+    }
+    
+    // ========== HANDSHAKE FRAME CAPTURE (M1-M4) ==========
+    // Queue frame for deferred processing (natural client reconnects)
+    if (!pendingHandshakeAdd && !pendingHandshakeBusy) {
+        memcpy(pendingHandshake.bssid, apBssid, 6);
+        memcpy(pendingHandshake.station, station, 6);
+        pendingHandshake.messageNum = messageNum;
+        pendingHandshake.frameLen = min((uint16_t)512, eapolLen);
+        memcpy(pendingHandshake.frameData, eapol, pendingHandshake.frameLen);
+        pendingHandshakeAdd = true;
+        
+        Serial.printf("[DNH] EAPOL M%d queued from %02X:%02X:%02X:%02X:%02X:%02X\n",
+            messageNum, apBssid[0], apBssid[1], apBssid[2], apBssid[3], apBssid[4], apBssid[5]);
     }
 }

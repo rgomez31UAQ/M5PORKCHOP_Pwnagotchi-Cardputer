@@ -71,4 +71,5 @@ private:
     // Network lookup
     static int findNetwork(const uint8_t* bssid);
     static int findOrCreatePMKID(const uint8_t* bssid);
+    static int findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station);
 };
