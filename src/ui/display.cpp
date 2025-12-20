@@ -934,18 +934,18 @@ void Display::drawAboutScreen(M5Canvas& canvas) {
     
     // Version
     canvas.setTextSize(1);
-    canvas.drawString("v" BUILD_VERSION, DISPLAY_W / 2, 25);
+    canvas.drawString("V" BUILD_VERSION, DISPLAY_W / 2, 25);
     
     // Author
     canvas.setTextColor(COLOR_FG);
-    canvas.drawString("by 0ct0", DISPLAY_W / 2, 38);
+    canvas.drawString("BY 0CT0", DISPLAY_W / 2, 38);
     
     // GitHub (single line)
-    canvas.drawString("github.com/0ct0sec/M5PORKCHOP", DISPLAY_W / 2, 50);
+    canvas.drawString("GITHUB.COM/0CT0SEC/M5PORKCHOP", DISPLAY_W / 2, 50);
     
     // Commit hash
     canvas.setTextColor(COLOR_ACCENT);
-    canvas.drawString("commit: " BUILD_COMMIT, DISPLAY_W / 2, 64);
+    canvas.drawString("COMMIT: " BUILD_COMMIT, DISPLAY_W / 2, 64);
     
     // Random quote
     canvas.setTextColor(COLOR_FG);
