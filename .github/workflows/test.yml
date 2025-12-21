@@ -2,7 +2,7 @@ name: Unit Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, personality_disorder_innit ]
   pull_request:
     branches: [ main ]
 
