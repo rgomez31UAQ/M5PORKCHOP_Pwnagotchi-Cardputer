@@ -12,13 +12,47 @@ static const size_t DNH_MAX_NETWORKS = 100;
 static const size_t DNH_MAX_PMKIDS = 50;
 static const size_t DNH_MAX_HANDSHAKES = 25;
 static const uint32_t DNH_STALE_TIMEOUT = 30000;  // 30s
-static const uint16_t DNH_HOP_INTERVAL = 200;     // 200ms per channel
+static const uint16_t DNH_HOP_INTERVAL = 200;     // Legacy default (now adaptive)
 static const uint16_t DNH_DWELL_TIME = 300;       // 300ms dwell for SSID
 
-// DNH State Machine - simpler than OINK (no attack states)
+// Adaptive state machine parameters
+static const uint16_t HOP_BASE_PRIMARY = 250;      // Ch 1,6,11 baseline
+static const uint16_t HOP_BASE_SECONDARY = 150;    // Other channels baseline
+static const uint16_t HOP_MIN = 120;               // Dead channel minimum
+static const uint16_t HUNT_DURATION = 600;         // EAPOL burst camp time
+static const uint16_t IDLE_SWEEP_TIME = 80;        // All-dead fast peek
+static const uint8_t BUSY_THRESHOLD = 5;           // Beacons = "busy"
+static const uint8_t DEAD_STREAK_LIMIT = 3;        // Visits = "dead"
+static const uint32_t HUNT_COOLDOWN_MS = 10000;    // 10s re-hunt delay
+static const uint8_t MAX_INCOMPLETE_HS = 20;       // Track incomplete handshakes
+static const uint32_t INCOMPLETE_HS_TIMEOUT = 60000; // 60s age-out
+static const uint32_t STATS_DECAY_INTERVAL = 120000; // 2min reset
+
+// DNH State Machine - adaptive timing based on channel activity
 enum class DNHState : uint8_t {
-    HOPPING = 0,   // Normal channel hopping
-    DWELLING       // Paused to catch beacon for SSID backfill
+    HOPPING = 0,   // Adaptive channel hopping
+    DWELLING,      // Paused to catch beacon for SSID backfill
+    HUNTING,       // High activity detected, extended dwell for handshake
+    IDLE_SWEEP     // All channels dead, fast sweeps
+};
+
+// Channel activity tracking
+struct ChannelStats {
+    uint8_t channel;
+    uint8_t beaconCount;       // Last visit
+    uint8_t eapolCount;        // Last visit
+    uint32_t lastActivity;     // millis()
+    uint8_t priority;          // 0-255 (100 = baseline)
+    uint8_t deadStreak;        // Consecutive dead visits
+    uint16_t lifetimeBeacons;  // Total for stats
+};
+
+// Incomplete handshake tracking for revisit
+struct IncompleteHS {
+    uint8_t bssid[6];
+    uint8_t capturedMask;      // Bits 0-3 for M1-M4
+    uint8_t channel;
+    uint32_t lastSeen;
 };
 
 class DoNoHamMode {
@@ -59,9 +93,26 @@ private:
     static std::vector<CapturedPMKID> pmkids;
     static std::vector<CapturedHandshake> handshakes;
     
+    // Adaptive state machine
+    static ChannelStats channelStats[13];
+    static std::vector<IncompleteHS> incompleteHandshakes;
+    static uint32_t huntStartTime;
+    static uint32_t lastHuntTime;          // Per-channel cooldown
+    static uint8_t lastHuntChannel;
+    static uint32_t lastStatsDecay;
+    static uint8_t lastCycleActivity;      // Total beacons in last cycle
+    
     // Channel hopping
     static void hopToNextChannel();
     static void startDwell();
+    static uint16_t getAdaptiveHopDelay();
+    static void updateChannelStats(uint8_t beacons, uint8_t eapols);
+    static void decayChannelStats();
+    static bool isPrimaryChannel(uint8_t ch);
+    static bool checkHuntingTrigger();     // Returns true if entered HUNTING
+    static void checkIdleSweep();
+    static void trackIncompleteHandshake(const uint8_t* bssid, uint8_t mask, uint8_t ch);
+    static void pruneIncompleteHandshakes();
     
     // Cleanup
     static void ageOutStaleNetworks();

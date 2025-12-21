@@ -27,6 +27,15 @@ std::vector<DetectedNetwork> DoNoHamMode::networks;
 std::vector<CapturedPMKID> DoNoHamMode::pmkids;
 std::vector<CapturedHandshake> DoNoHamMode::handshakes;
 
+// Adaptive state machine
+ChannelStats DoNoHamMode::channelStats[13] = {};
+std::vector<IncompleteHS> DoNoHamMode::incompleteHandshakes;
+uint32_t DoNoHamMode::huntStartTime = 0;
+uint32_t DoNoHamMode::lastHuntTime = 0;
+uint8_t DoNoHamMode::lastHuntChannel = 0;
+uint32_t DoNoHamMode::lastStatsDecay = 0;
+uint8_t DoNoHamMode::lastCycleActivity = 0;
+
 // Guard flag for race condition prevention
 static volatile bool dnhBusy = false;
 
@@ -87,6 +96,19 @@ void DoNoHamMode::start() {
     pmkids.shrink_to_fit();
     handshakes.clear();
     handshakes.shrink_to_fit();
+    incompleteHandshakes.clear();
+    incompleteHandshakes.shrink_to_fit();
+    
+    // Initialize channel stats
+    for (int i = 0; i < 13; i++) {
+        channelStats[i].channel = CHANNEL_ORDER[i];
+        channelStats[i].beaconCount = 0;
+        channelStats[i].eapolCount = 0;
+        channelStats[i].lastActivity = 0;
+        channelStats[i].priority = 100;  // Baseline
+        channelStats[i].deadStreak = 0;
+        channelStats[i].lifetimeBeacons = 0;
+    }
     
     // Reset state
     state = DNHState::HOPPING;
@@ -96,6 +118,11 @@ void DoNoHamMode::start() {
     lastCleanupTime = millis();
     lastSaveTime = millis();
     lastMoodTime = millis();
+    lastStatsDecay = millis();
+    lastCycleActivity = 0;
+    huntStartTime = 0;
+    lastHuntTime = 0;
+    lastHuntChannel = 0;
     dwellResolved = false;
     
     // Reset deferred flags
@@ -214,6 +241,7 @@ void DoNoHamMode::stopSeamless() {
     SDLog::log("DNH", "Seamless stop");
     
     running = false;
+    dnhBusy = false;  // Reset busy flag for clean handoff
     
     // DON'T disable promiscuous mode - OINK will take over
     // DON'T clear vectors - let them die naturally
@@ -370,9 +398,19 @@ void DoNoHamMode::update() {
     // Channel hopping state machine
     switch (state) {
         case DNHState::HOPPING:
-            if (now - lastHopTime > DNH_HOP_INTERVAL) {
-                hopToNextChannel();
-                lastHopTime = now;
+            {
+                uint32_t hopDelay = getAdaptiveHopDelay();
+                if (now - lastHopTime > hopDelay) {
+                    hopToNextChannel();
+                    lastHopTime = now;
+                    
+                    // Check if we should enter HUNTING mode after hop
+                    bool enteredHunting = checkHuntingTrigger();
+                    if (!enteredHunting) {
+                        // Check if all channels are dead -> IDLE_SWEEP
+                        checkIdleSweep();
+                    }
+                }
             }
             break;
             
@@ -382,12 +420,47 @@ void DoNoHamMode::update() {
                 dwellResolved = false;
             }
             break;
+            
+        case DNHState::HUNTING:
+            if (now - huntStartTime > HUNT_DURATION) {
+                // Hunt timeout, return to hopping
+                state = DNHState::HOPPING;
+                lastHuntTime = now;
+                lastHuntChannel = currentChannel;
+            }
+            // HUNTING state deliberately does NOT hop - camps on hot channel
+            break;
+            
+        case DNHState::IDLE_SWEEP:
+            {
+                uint32_t peekDelay = IDLE_SWEEP_TIME;
+                if (now - lastHopTime > peekDelay) {
+                    hopToNextChannel();
+                    lastHopTime = now;
+                    
+                    // If we see ANY activity, exit IDLE_SWEEP
+                    int idx = currentChannel - 1;
+                    if (idx >= 0 && idx < 13) {
+                        if (channelStats[idx].beaconCount > 0) {
+                            state = DNHState::HOPPING;
+                        }
+                    }
+                }
+            }
+            break;
     }
     
     // Periodic cleanup (every 10 seconds)
     if (now - lastCleanupTime > 10000) {
         ageOutStaleNetworks();
+        pruneIncompleteHandshakes(); // Also prune stale handshake tracking
         lastCleanupTime = now;
+    }
+    
+    // Periodic stats decay (every 2 minutes)
+    if (now - lastStatsDecay > STATS_DECAY_INTERVAL) {
+        decayChannelStats();
+        lastStatsDecay = now;
     }
     
     // Periodic save (every 2 seconds)
@@ -410,6 +483,145 @@ void DoNoHamMode::hopToNextChannel() {
     channelIndex = (channelIndex + 1) % 13;
     currentChannel = CHANNEL_ORDER[channelIndex];
     esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+}
+
+// Check if channel is primary (1, 6, or 11)
+bool DoNoHamMode::isPrimaryChannel(uint8_t ch) {
+    return (ch == 1 || ch == 6 || ch == 11);
+}
+
+// Calculate adaptive hop delay based on channel activity
+uint16_t DoNoHamMode::getAdaptiveHopDelay() {
+    ChannelStats& stats = channelStats[channelIndex];
+    
+    // Base timing: primary channels get more time
+    uint16_t baseTime = isPrimaryChannel(stats.channel) ? HOP_BASE_PRIMARY : HOP_BASE_SECONDARY;
+    
+    // Adjust based on local activity
+    uint16_t hopDelay;
+    if (stats.beaconCount >= BUSY_THRESHOLD) {
+        hopDelay = baseTime * 1.5;  // Busy channel
+    } else if (stats.beaconCount >= 2) {
+        hopDelay = baseTime;  // Normal activity
+    } else if (stats.deadStreak >= DEAD_STREAK_LIMIT) {
+        hopDelay = HOP_MIN;  // Dead channel, minimum time
+    } else {
+        hopDelay = baseTime * 0.7;  // Light activity
+    }
+    
+    // Global activity adjustment
+    if (lastCycleActivity < 5) {
+        hopDelay *= 0.6;  // Quiet spectrum, speed up
+    } else if (lastCycleActivity > 40) {
+        hopDelay *= 1.2;  // Busy spectrum, slow down
+    }
+    
+    return hopDelay;
+}
+
+// Update channel stats after visiting
+void DoNoHamMode::updateChannelStats(uint8_t beacons, uint8_t eapols) {
+    ChannelStats& stats = channelStats[channelIndex];
+    
+    stats.beaconCount = beacons;
+    stats.eapolCount = eapols;
+    stats.lifetimeBeacons += beacons;
+    
+    if (beacons > 0 || eapols > 0) {
+        stats.lastActivity = millis();
+        stats.deadStreak = 0;
+        stats.priority = min(255, stats.priority + 5);  // Boost priority
+    } else {
+        stats.deadStreak++;
+        stats.priority = max(50, stats.priority - 3);  // Reduce priority
+    }
+}
+
+// Decay channel stats every 2 minutes
+void DoNoHamMode::decayChannelStats() {
+    for (int i = 0; i < 13; i++) {
+        channelStats[i].beaconCount = 0;
+        channelStats[i].eapolCount = 0;
+        channelStats[i].priority = 100;  // Reset to baseline
+        channelStats[i].deadStreak = 0;
+    }
+    lastCycleActivity = 0;
+}
+
+// Check if we should enter HUNTING state
+bool DoNoHamMode::checkHuntingTrigger() {
+    ChannelStats& stats = channelStats[channelIndex];
+    uint32_t now = millis();
+    
+    // Don't re-hunt same channel too quickly
+    if (lastHuntChannel == currentChannel && (now - lastHuntTime) < HUNT_COOLDOWN_MS) {
+        return false;
+    }
+    
+    // Trigger: 2+ EAPOL frames or high beacon burst
+    if (stats.eapolCount >= 2 || stats.beaconCount >= 8) {
+        state = DNHState::HUNTING;
+        huntStartTime = now;
+        lastHuntChannel = currentChannel;
+        lastHuntTime = now;
+        Serial.printf("[DNH] HUNTING on ch %d (B:%d E:%d)\n", 
+            currentChannel, stats.beaconCount, stats.eapolCount);
+        return true;
+    }
+    return false;
+}
+
+// Check if all channels are dead → IDLE_SWEEP
+void DoNoHamMode::checkIdleSweep() {
+    // If just completed full cycle
+    if (channelIndex == 0) {
+        uint8_t totalActivity = 0;
+        for (int i = 0; i < 13; i++) {
+            totalActivity += channelStats[i].beaconCount;
+        }
+        lastCycleActivity = totalActivity;
+        
+        // All channels dead → enter IDLE_SWEEP
+        if (totalActivity == 0) {
+            state = DNHState::IDLE_SWEEP;
+            Serial.println("[DNH] IDLE_SWEEP: spectrum silent");
+        }
+    }
+}
+
+// Track incomplete handshake for revisit
+void DoNoHamMode::trackIncompleteHandshake(const uint8_t* bssid, uint8_t mask, uint8_t ch) {
+    // Check if already tracked
+    for (auto& ihs : incompleteHandshakes) {
+        if (memcmp(ihs.bssid, bssid, 6) == 0) {
+            ihs.capturedMask = mask;
+            ihs.lastSeen = millis();
+            return;
+        }
+    }
+    
+    // Add new if room
+    if (incompleteHandshakes.size() < MAX_INCOMPLETE_HS) {
+        IncompleteHS ihs;
+        memcpy(ihs.bssid, bssid, 6);
+        ihs.capturedMask = mask;
+        ihs.channel = ch;
+        ihs.lastSeen = millis();
+        incompleteHandshakes.push_back(ihs);
+    }
+}
+
+// Remove stale incomplete handshakes
+void DoNoHamMode::pruneIncompleteHandshakes() {
+    uint32_t now = millis();
+    auto it = incompleteHandshakes.begin();
+    while (it != incompleteHandshakes.end()) {
+        if ((now - it->lastSeen) > INCOMPLETE_HS_TIMEOUT) {
+            it = incompleteHandshakes.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void DoNoHamMode::startDwell() {
@@ -787,6 +999,14 @@ void DoNoHamMode::handleBeacon(const uint8_t* frame, uint16_t len, int8_t rssi) 
         pendingNetwork.beaconCount = 1;
         pendingNetworkAdd = true;
     }
+    
+    // Track channel activity for adaptive hopping
+    int idx = currentChannel - 1;
+    if (idx >= 0 && idx < 13) {
+        channelStats[idx].beaconCount++;
+        channelStats[idx].lifetimeBeacons++;
+        channelStats[idx].lastActivity = millis();
+    }
 }
 
 void DoNoHamMode::handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi) {
@@ -958,4 +1178,15 @@ void DoNoHamMode::handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi) {
         Serial.printf("[DNH] EAPOL M%d queued from %02X:%02X:%02X:%02X:%02X:%02X\n",
             messageNum, apBssid[0], apBssid[1], apBssid[2], apBssid[3], apBssid[4], apBssid[5]);
     }
+    
+    // Track channel activity for adaptive hopping
+    int idx = currentChannel - 1;
+    if (idx >= 0 && idx < 13) {
+        channelStats[idx].eapolCount++;
+        channelStats[idx].lastActivity = millis();
+    }
+    
+    // Track incomplete handshakes for future hunting
+    uint8_t captureMask = (1 << (messageNum - 1));
+    trackIncompleteHandshake(apBssid, captureMask, currentChannel);
 }
