@@ -236,7 +236,7 @@ bool SwineStats::hasClassBuff(ClassBuff cb) {
 uint8_t SwineStats::getDeauthBurstCount() {
     BuffState buffs = calculateBuffs();
     uint8_t classBuffs = calculateClassBuffs();
-    uint8_t base = 5;  // Default burst count
+    uint8_t base = 4;  // Default burst count (quality over quantity)
     
     // Class buff: H4RD_SNOUT +1 burst (applied first)
     if (classBuffs & (uint8_t)ClassBuff::H4RD_SNOUT) {

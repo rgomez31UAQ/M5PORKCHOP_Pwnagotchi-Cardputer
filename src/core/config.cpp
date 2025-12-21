@@ -110,7 +110,7 @@ bool Config::load() {
     // WiFi config
     if (doc["wifi"].is<JsonObject>()) {
         wifiConfig.channelHopInterval = doc["wifi"]["channelHopInterval"] | 500;
-        wifiConfig.lockTime = doc["wifi"]["lockTime"] | 4000;
+        wifiConfig.lockTime = doc["wifi"]["lockTime"] | 12000;
         wifiConfig.enableDeauth = doc["wifi"]["enableDeauth"] | true;
         wifiConfig.randomizeMAC = doc["wifi"]["randomizeMAC"] | true;
         wifiConfig.otaSSID = doc["wifi"]["otaSSID"] | "";
