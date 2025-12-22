@@ -2082,58 +2082,59 @@ bool OinkMode::saveHandshakePCAP(const CapturedHandshake& hs, const char* path) 
         }
     }
     
-    // Build 802.11 data frame + EAPOL for each captured message
-    // We need to reconstruct the full frame for PCAP
-    
+    // Write EAPOL frames to PCAP
     for (int i = 0; i < 4; i++) {
         if (!(hs.capturedMask & (1 << i))) continue;
         
         const EAPOLFrame& frame = hs.frames[i];
         if (frame.len == 0) continue;
         
-        // Build fake 802.11 Data frame header + LLC/SNAP + EAPOL
-        uint8_t pkt[600];
-        uint16_t pktLen = 0;
-        
-        // 802.11 Data frame header (24 bytes)
-        // Frame Control: Type=Data(0x08), Flags in byte[1]
-        // Byte[1] bits: ToDS=bit0, FromDS=bit1
-        pkt[0] = 0x08;
-        pkt[2] = 0x00; pkt[3] = 0x00;  // Duration
-        
-        // Addresses depend on message direction
-        // IEEE 802.11 address fields:
-        // ToDS=0, FromDS=1: Addr1=DA, Addr2=BSSID, Addr3=SA
-        // ToDS=1, FromDS=0: Addr1=BSSID, Addr2=SA, Addr3=DA
-        if (i == 0 || i == 2) {  // M1, M3: AP->Station (FromDS=1, ToDS=0)
-            pkt[1] = 0x02;  // FromDS=1, ToDS=0
-            memcpy(pkt + 4, hs.station, 6);   // Addr1 = DA (destination = station)
-            memcpy(pkt + 10, hs.bssid, 6);    // Addr2 = BSSID (source = AP)
-            memcpy(pkt + 16, hs.bssid, 6);    // Addr3 = SA (source address)
-        } else {  // M2, M4: Station->AP (ToDS=1, FromDS=0)
-            pkt[1] = 0x01;  // ToDS=1, FromDS=0
-            memcpy(pkt + 4, hs.bssid, 6);     // Addr1 = BSSID (receiver = AP)
-            memcpy(pkt + 10, hs.station, 6);  // Addr2 = SA (transmitter = station)
-            memcpy(pkt + 16, hs.bssid, 6);    // Addr3 = DA (destination = BSSID)
+        // Prefer stored fullFrame (real 802.11 capture) over reconstruction
+        if (frame.fullFrameLen > 0 && frame.fullFrameLen <= 300) {
+            // Use the actual captured 802.11 frame (best quality)
+            writePCAPPacket(f, frame.fullFrame, frame.fullFrameLen, frame.timestamp);
+            packetCount++;
+            Serial.printf("[OINK] EAPOL M%d written to PCAP (real frame, %d bytes)\n", i + 1, frame.fullFrameLen);
+        } else {
+            // Fallback: reconstruct frame from EAPOL payload (legacy path)
+            uint8_t pkt[600];
+            uint16_t pktLen = 0;
+            
+            // 802.11 Data frame header (24 bytes)
+            pkt[0] = 0x08;
+            pkt[2] = 0x00; pkt[3] = 0x00;  // Duration
+            
+            // Addresses depend on message direction
+            if (i == 0 || i == 2) {  // M1, M3: AP->Station (FromDS=1, ToDS=0)
+                pkt[1] = 0x02;
+                memcpy(pkt + 4, hs.station, 6);
+                memcpy(pkt + 10, hs.bssid, 6);
+                memcpy(pkt + 16, hs.bssid, 6);
+            } else {  // M2, M4: Station->AP (ToDS=1, FromDS=0)
+                pkt[1] = 0x01;
+                memcpy(pkt + 4, hs.bssid, 6);
+                memcpy(pkt + 10, hs.station, 6);
+                memcpy(pkt + 16, hs.bssid, 6);
+            }
+            
+            pkt[22] = 0x00; pkt[23] = 0x00;  // Sequence
+            pktLen = 24;
+            
+            // LLC/SNAP header (8 bytes)
+            pkt[24] = 0xAA; pkt[25] = 0xAA; pkt[26] = 0x03;
+            pkt[27] = 0x00; pkt[28] = 0x00; pkt[29] = 0x00;
+            pkt[30] = 0x88; pkt[31] = 0x8E;
+            pktLen = 32;
+            
+            // EAPOL data
+            if (32 + frame.len > sizeof(pkt)) continue;
+            memcpy(pkt + 32, frame.data, frame.len);
+            pktLen += frame.len;
+            
+            writePCAPPacket(f, pkt, pktLen, frame.timestamp);
+            packetCount++;
+            Serial.printf("[OINK] EAPOL M%d written to PCAP (reconstructed, %d bytes)\n", i + 1, pktLen);
         }
-        
-        pkt[22] = 0x00; pkt[23] = 0x00;  // Sequence
-        pktLen = 24;
-        
-        // LLC/SNAP header (8 bytes)
-        pkt[24] = 0xAA; pkt[25] = 0xAA; pkt[26] = 0x03;
-        pkt[27] = 0x00; pkt[28] = 0x00; pkt[29] = 0x00;
-        pkt[30] = 0x88; pkt[31] = 0x8E;  // EAPOL ethertype
-        pktLen = 32;
-        
-        // EAPOL data
-        if (32 + frame.len > sizeof(pkt)) continue;  // Bounds check
-        memcpy(pkt + 32, frame.data, frame.len);
-        pktLen += frame.len;
-        
-        writePCAPPacket(f, pkt, pktLen, frame.timestamp);
-        packetCount++;
-        Serial.printf("[OINK] EAPOL M%d written to PCAP (%d bytes)\n", i + 1, pktLen);
     }
     
     Serial.printf("[OINK] PCAP saved with %d packets (mask: %s%s%s%s)\n", 
