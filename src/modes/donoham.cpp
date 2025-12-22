@@ -55,15 +55,15 @@ struct PendingPMKIDCreate {
 };
 static PendingPMKIDCreate pendingPMKIDCreate;
 
-// Single-slot deferred handshake frame add
+// Single-slot deferred handshake frame add (now stores all 4 frames)
 static volatile bool pendingHandshakeAdd = false;
 static volatile bool pendingHandshakeBusy = false;
 struct PendingHandshakeFrame {
     uint8_t bssid[6];
     uint8_t station[6];
-    uint8_t messageNum;
-    uint8_t frameData[512];
-    uint16_t frameLen;
+    uint8_t messageNum;  // DEPRECATED - kept for compatibility
+    EAPOLFrame frames[4];  // Store all 4 EAPOL frames (M1-M4)
+    uint8_t capturedMask;  // Bitmask: bit0=M1, bit1=M2, bit2=M3, bit3=M4
 };
 static PendingHandshakeFrame pendingHandshake;
 
@@ -339,7 +339,7 @@ void DoNoHamMode::update() {
         }
     }
     
-    // Process deferred handshake frame add
+    // Process deferred handshake frame add (batch process all queued frames)
     if (pendingHandshakeAdd && !pendingHandshakeBusy) {
         pendingHandshakeBusy = true;
         
@@ -347,39 +347,49 @@ void DoNoHamMode::update() {
         int hsIdx = findOrCreateHandshake(pendingHandshake.bssid, pendingHandshake.station);
         if (hsIdx >= 0) {
             CapturedHandshake& hs = handshakes[hsIdx];
-            uint8_t frameIdx = pendingHandshake.messageNum - 1;
             
-            // Store frame data
-            uint16_t copyLen = min((uint16_t)512, pendingHandshake.frameLen);
-            memcpy(hs.frames[frameIdx].data, pendingHandshake.frameData, copyLen);
-            hs.frames[frameIdx].len = copyLen;
-            hs.frames[frameIdx].messageNum = pendingHandshake.messageNum;
-            hs.frames[frameIdx].timestamp = now;
+            // Process ALL queued frames (M1-M4) from capturedMask
+            for (int msgIdx = 0; msgIdx < 4; msgIdx++) {
+                if (pendingHandshake.capturedMask & (1 << msgIdx)) {
+                    // Frame is present in the queued data
+                    if (hs.frames[msgIdx].len == 0) {  // Not already captured
+                        uint16_t copyLen = pendingHandshake.frames[msgIdx].len;
+                        if (copyLen > 0 && copyLen <= 512) {
+                            memcpy(hs.frames[msgIdx].data, pendingHandshake.frames[msgIdx].data, copyLen);
+                            hs.frames[msgIdx].len = copyLen;
+                            hs.frames[msgIdx].messageNum = msgIdx + 1;
+                            hs.frames[msgIdx].timestamp = now;
+                            hs.capturedMask |= (1 << msgIdx);
+                            hs.lastSeen = now;
+                            
+                            Serial.printf("[DNH] M%d captured (deferred)\n", msgIdx + 1);
+                        }
+                    }
+                }
+            }
             
-            // Update mask
-            hs.capturedMask |= (1 << frameIdx);
-            hs.lastSeen = now;
+            // Look up SSID if missing
+            if (hs.ssid[0] == 0) {
+                int netIdx = findNetwork(hs.bssid);
+                if (netIdx >= 0 && networks[netIdx].ssid[0] != 0) {
+                    strncpy(hs.ssid, networks[netIdx].ssid, 32);
+                    hs.ssid[32] = 0;
+                }
+            }
             
             // Check if we just completed a valid pair
             if (hs.hasValidPair() && !hs.saved && !pendingHandshakeCapture) {
-                // Look up SSID if missing
-                if (hs.ssid[0] == 0) {
-                    int netIdx = findNetwork(hs.bssid);
-                    if (netIdx >= 0 && networks[netIdx].ssid[0] != 0) {
-                        strncpy(hs.ssid, networks[netIdx].ssid, 32);
-                        hs.ssid[32] = 0;
-                    }
-                }
-                
                 strncpy(pendingHandshakeSSID, hs.ssid, 32);
                 pendingHandshakeSSID[32] = 0;
                 pendingHandshakeCapture = true;
                 
-                Serial.printf("[DNH] Handshake complete: %s (M%d captured)\n", 
-                    hs.ssid[0] ? hs.ssid : "?", pendingHandshake.messageNum);
+                Serial.printf("[DNH] Handshake complete: %s\n", 
+                    hs.ssid[0] ? hs.ssid : "?");
             }
         }
         
+        // Clear slot for next handshake
+        pendingHandshake.capturedMask = 0;
         pendingHandshakeAdd = false;
         pendingHandshakeBusy = false;
     }
@@ -1155,16 +1165,37 @@ void DoNoHamMode::handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi) {
     
     // ========== HANDSHAKE FRAME CAPTURE (M1-M4) ==========
     // Queue frame for deferred processing (natural client reconnects)
-    if (!pendingHandshakeAdd && !pendingHandshakeBusy) {
-        memcpy(pendingHandshake.bssid, apBssid, 6);
-        memcpy(pendingHandshake.station, station, 6);
-        pendingHandshake.messageNum = messageNum;
-        pendingHandshake.frameLen = min((uint16_t)512, eapolLen);
-        memcpy(pendingHandshake.frameData, eapol, pendingHandshake.frameLen);
-        pendingHandshakeAdd = true;
+    // Batch accumulate if frames arrive in quick succession
+    if (!pendingHandshakeBusy) {
+        // Check if slot already has a frame for this handshake
+        bool sameHandshake = pendingHandshakeAdd &&
+                             memcmp(pendingHandshake.bssid, apBssid, 6) == 0 &&
+                             memcmp(pendingHandshake.station, station, 6) == 0;
         
-        Serial.printf("[DNH] EAPOL M%d queued from %02X:%02X:%02X:%02X:%02X:%02X\n",
-            messageNum, apBssid[0], apBssid[1], apBssid[2], apBssid[3], apBssid[4], apBssid[5]);
+        if (!pendingHandshakeAdd || sameHandshake) {
+            // Either slot is free, or it's for the same handshake (update it)
+            if (!pendingHandshakeAdd) {
+                // First frame for this handshake - init the slot
+                memcpy(pendingHandshake.bssid, apBssid, 6);
+                memcpy(pendingHandshake.station, station, 6);
+                pendingHandshake.messageNum = messageNum;  // DEPRECATED
+                pendingHandshake.capturedMask = 0;
+            }
+            
+            // Store this frame in the appropriate slot (M1-M4 → index 0-3)
+            uint8_t frameIdx = messageNum - 1;
+            if (frameIdx < 4) {
+                uint16_t copyLen = min((uint16_t)512, eapolLen);
+                memcpy(pendingHandshake.frames[frameIdx].data, eapol, copyLen);
+                pendingHandshake.frames[frameIdx].len = copyLen;
+                pendingHandshake.capturedMask |= (1 << frameIdx);
+            }
+            
+            pendingHandshakeAdd = true;
+            Serial.printf("[DNH] EAPOL M%d queued from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                messageNum, apBssid[0], apBssid[1], apBssid[2], apBssid[3], apBssid[4], apBssid[5]);
+        }
+        // else: slot full with different handshake, drop this frame (rare race)
     }
     
     // Track channel activity for adaptive hopping
