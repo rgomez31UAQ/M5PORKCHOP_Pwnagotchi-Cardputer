@@ -14,6 +14,34 @@
 #include "../piglet/avatar.h"
 #include <SD.h>
 
+// PCAP file format structures (same as OINK for WPA-SEC compatibility)
+#pragma pack(push, 1)
+struct DNH_PCAPHeader {
+    uint32_t magic;
+    uint16_t version_major;
+    uint16_t version_minor;
+    int32_t thiszone;
+    uint32_t sigfigs;
+    uint32_t snaplen;
+    uint32_t linktype;
+};
+
+struct DNH_PCAPPacketHeader {
+    uint32_t ts_sec;
+    uint32_t ts_usec;
+    uint32_t incl_len;
+    uint32_t orig_len;
+};
+#pragma pack(pop)
+
+// Minimal radiotap header (8 bytes) - required for WPA-SEC
+static const uint8_t DNH_RADIOTAP_HEADER[] = {
+    0x00,       // Header revision
+    0x00,       // Header pad
+    0x08, 0x00, // Header length (8, little-endian)
+    0x00, 0x00, 0x00, 0x00  // Present flags (no optional fields)
+};
+
 // Static member initialization
 bool DoNoHamMode::running = false;
 DNHState DoNoHamMode::state = DNHState::HOPPING;
@@ -813,7 +841,7 @@ void DoNoHamMode::saveAllHandshakes() {
             eapolFrame = &hs.frames[1];  // M2
         }
         
-        if (nonceFrame->len < 51 || eapolFrame->len < 95) continue;
+        if (nonceFrame->len < 51 || eapolFrame->len < 97) continue;  // MIC at offset 81-96, need len >= 97
         
         // Build filename: /handshakes/BSSID_hs.22000
         char filename[64];
@@ -900,6 +928,68 @@ void DoNoHamMode::saveAllHandshakes() {
         if (txtFile) {
             txtFile.println(hs.ssid);
             txtFile.close();
+        }
+        
+        // Also save PCAP (for WPA-SEC upload and wireshark analysis)
+        char pcapFilename[64];
+        snprintf(pcapFilename, sizeof(pcapFilename), "/handshakes/%02X%02X%02X%02X%02X%02X.pcap",
+            hs.bssid[0], hs.bssid[1], hs.bssid[2], hs.bssid[3], hs.bssid[4], hs.bssid[5]);
+        
+        File pcapFile = SD.open(pcapFilename, FILE_WRITE);
+        if (pcapFile) {
+            // Write PCAP global header
+            DNH_PCAPHeader hdr = {
+                .magic = 0xA1B2C3D4,
+                .version_major = 2,
+                .version_minor = 4,
+                .thiszone = 0,
+                .sigfigs = 0,
+                .snaplen = 65535,
+                .linktype = 127  // IEEE802_11_RADIOTAP
+            };
+            pcapFile.write((uint8_t*)&hdr, sizeof(hdr));
+            
+            int packetCount = 0;
+            
+            // Write beacon if available
+            if (hs.hasBeacon()) {
+                uint32_t beaconTotalLen = sizeof(DNH_RADIOTAP_HEADER) + hs.beaconLen;
+                DNH_PCAPPacketHeader beaconPkt = {
+                    .ts_sec = hs.firstSeen / 1000,
+                    .ts_usec = (hs.firstSeen % 1000) * 1000,
+                    .incl_len = beaconTotalLen,
+                    .orig_len = beaconTotalLen
+                };
+                pcapFile.write((uint8_t*)&beaconPkt, sizeof(beaconPkt));
+                pcapFile.write(DNH_RADIOTAP_HEADER, sizeof(DNH_RADIOTAP_HEADER));
+                pcapFile.write(hs.beaconData, hs.beaconLen);
+                packetCount++;
+            }
+            
+            // Write EAPOL frames
+            for (int i = 0; i < 4; i++) {
+                if (!(hs.capturedMask & (1 << i))) continue;
+                const EAPOLFrame& frame = hs.frames[i];
+                if (frame.len == 0) continue;
+                
+                // Prefer fullFrame if available
+                if (frame.fullFrameLen > 0 && frame.fullFrameLen <= 300) {
+                    uint32_t totalLen = sizeof(DNH_RADIOTAP_HEADER) + frame.fullFrameLen;
+                    DNH_PCAPPacketHeader pkt = {
+                        .ts_sec = frame.timestamp / 1000,
+                        .ts_usec = (frame.timestamp % 1000) * 1000,
+                        .incl_len = totalLen,
+                        .orig_len = totalLen
+                    };
+                    pcapFile.write((uint8_t*)&pkt, sizeof(pkt));
+                    pcapFile.write(DNH_RADIOTAP_HEADER, sizeof(DNH_RADIOTAP_HEADER));
+                    pcapFile.write(frame.fullFrame, frame.fullFrameLen);
+                    packetCount++;
+                }
+            }
+            
+            pcapFile.close();
+            Serial.printf("[DNH] PCAP saved: %s (%d packets)\n", pcapFilename, packetCount);
         }
         
         hs.saved = true;
@@ -1012,6 +1102,23 @@ void DoNoHamMode::handleBeacon(const uint8_t* frame, uint16_t len, int8_t rssi) 
         pendingNetwork.lastSeen = millis();
         pendingNetwork.beaconCount = 1;
         pendingNetworkAdd = true;
+    }
+    
+    // Store beacon for any in-progress handshakes from this BSSID
+    // (needed for PCAP export / WPA-SEC upload)
+    for (auto& hs : handshakes) {
+        if (!hs.saved && hs.beaconData == nullptr && memcmp(hs.bssid, bssid, 6) == 0) {
+            // Allocate and copy beacon data
+            uint16_t copyLen = (len > 512) ? 512 : len;  // Cap at reasonable size
+            hs.beaconData = (uint8_t*)malloc(copyLen);
+            if (hs.beaconData) {
+                memcpy(hs.beaconData, frame, copyLen);
+                hs.beaconLen = copyLen;
+                Serial.printf("[DNH] Beacon stored for handshake: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+            }
+            break;  // One beacon per handshake is enough
+        }
     }
     
     // Track channel activity for adaptive hopping
