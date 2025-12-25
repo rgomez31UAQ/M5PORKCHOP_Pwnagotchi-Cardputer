@@ -1632,7 +1632,8 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
                         // Look up SSID
                         if (p.ssid[0] == 0) {
                             int netIdx = findNetwork(bssid);
-                            if (netIdx >= 0) {
+                            // Double-check bounds to prevent TOCTOU race
+                            if (netIdx >= 0 && netIdx < (int)networks.size()) {
                                 strncpy(p.ssid, networks[netIdx].ssid, 32);
                                 p.ssid[32] = 0;
                             }
@@ -1656,7 +1657,8 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
                             memcpy(pendingPMKIDCreate.pmkid, pmkidData, 16);
                             // Get SSID from networks if available
                             int netIdx = findNetwork(bssid);
-                            if (netIdx >= 0) {
+                            // Double-check bounds to prevent TOCTOU race (network could be removed between lookup and access)
+                            if (netIdx >= 0 && netIdx < (int)networks.size()) {
                                 strncpy(pendingPMKIDCreate.ssid, networks[netIdx].ssid, 32);
                                 pendingPMKIDCreate.ssid[32] = 0;
                             } else {
@@ -1712,7 +1714,8 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
         // Look up SSID from networks if not set
         if (hs.ssid[0] == 0) {
             int netIdx = findNetwork(bssid);
-            if (netIdx >= 0) {
+            // Double-check bounds to prevent TOCTOU race
+            if (netIdx >= 0 && netIdx < (int)networks.size()) {
                 strncpy(hs.ssid, networks[netIdx].ssid, 32);
                 hs.ssid[32] = 0;  // Ensure null termination
             }

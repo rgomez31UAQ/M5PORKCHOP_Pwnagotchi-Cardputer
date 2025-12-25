@@ -23,7 +23,8 @@ enum class PorkchopMode : uint8_t {
     SWINE_STATS,    // Lifetime stats and buffs overlay
     BOAR_BROS,      // Manage excluded networks
     WIGLE_MENU,     // WiGLE file uploads
-    UNLOCKABLES     // Secret challenges menu
+    UNLOCKABLES,    // Secret challenges menu
+    CALL_PAPA_MODE  // BLE sync receiver (from Sirloin)
 };
 
 // Events for async callbacks

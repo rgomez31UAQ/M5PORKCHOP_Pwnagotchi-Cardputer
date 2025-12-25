@@ -14,6 +14,7 @@
 #include "../modes/warhog.h"
 #include "../modes/piggyblues.h"
 #include "../modes/spectrum.h"
+#include "../modes/call_papa.h"
 #include "../gps/gps.h"
 #include "../web/fileserver.h"
 #include "menu.h"
@@ -125,6 +126,7 @@ void Display::update() {
         case PorkchopMode::DNH_MODE:
         case PorkchopMode::WARHOG_MODE:
         case PorkchopMode::PIGGYBLUES_MODE:
+        case PorkchopMode::CALL_PAPA_MODE:
             // Draw piglet avatar and mood bubble (info embedded in bubble)
             Avatar::draw(mainCanvas);
             Mood::draw(mainCanvas);
@@ -295,24 +297,46 @@ void Display::drawTopBar() {
             modeStr = "UNL0CK4BL3S";
             modeColor = COLOR_ACCENT;
             break;
+        case PorkchopMode::CALL_PAPA_MODE:
+            {
+                char buf[24];
+                uint16_t synced = CallPapaMode::getTotalSynced();
+                if (synced > 0) {
+                    snprintf(buf, sizeof(buf), "SON OF A PIG [%d]", synced);
+                } else {
+                    snprintf(buf, sizeof(buf), "SON OF A PIG");
+                }
+                modeStr = buf;
+            }
+            modeColor = COLOR_ACCENT;
+            break;
     }
     
     // Append mood indicator
     int happiness = Mood::getCurrentHappiness();
-    String moodLabel;
+    const char* moodLabel;
     if (happiness > 70) moodLabel = "HYP3";
     else if (happiness > 30) moodLabel = "GUD";
     else if (happiness > -10) moodLabel = "0K";
     else if (happiness > -50) moodLabel = "M3H";
     else moodLabel = "S4D";
-    modeStr += " " + moodLabel;
     
-    // Append PWNED banner if active (only in OINK mode, persists until reboot)
+    // Build final mode string with fixed buffer to prevent heap fragmentation
+    char finalModeBuf[80];  // Ample size for mode + mood + PWNED + SSID
     if (mode == PorkchopMode::OINK_MODE && lootSSID.length() > 0) {
-        String upperLoot = lootSSID;
-        upperLoot.toUpperCase();
-        modeStr += " PWNED " + upperLoot;
+        // Include PWNED banner - truncate SSID if needed to fit
+        char upperLoot[20];  // Truncate SSID to 16 chars max for display
+        strncpy(upperLoot, lootSSID.c_str(), sizeof(upperLoot) - 1);
+        upperLoot[sizeof(upperLoot) - 1] = '\0';
+        for (int i = 0; upperLoot[i]; i++) upperLoot[i] = toupper(upperLoot[i]);
+        snprintf(finalModeBuf, sizeof(finalModeBuf), "%s %s PWNED %s", 
+                 modeStr.c_str(), moodLabel, upperLoot);
+    } else {
+        // No PWNED banner
+        snprintf(finalModeBuf, sizeof(finalModeBuf), "%s %s", 
+                 modeStr.c_str(), moodLabel);
     }
+    modeStr = finalModeBuf;
     
     topBar.setTextColor(modeColor);
     topBar.setTextDatum(top_left);
@@ -469,6 +493,33 @@ void Display::drawBottomBar() {
     } else if (mode == PorkchopMode::BOAR_BROS) {
         // BOAR BROS: show delete hint
         stats = "[D] DELETE";
+    } else if (mode == PorkchopMode::CALL_PAPA_MODE) {
+        // SON OF A PIG: show sync status (message only when SIRLOIN available)
+        if (CallPapaMode::isSyncing()) {
+            const SyncProgress& prog = CallPapaMode::getProgress();
+            char buf[48];
+            snprintf(buf, sizeof(buf), "SYNC: %d/%d (%d%%)", 
+                     prog.currentChunk, prog.totalChunks,
+                     prog.totalChunks > 0 ? (prog.currentChunk * 100 / prog.totalChunks) : 0);
+            stats = String(buf);
+        } else if (CallPapaMode::isConnected()) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "READY P:%d HS:%d [ENTER]SYNC", 
+                     CallPapaMode::getRemotePMKIDCount(),
+                     CallPapaMode::getRemoteHandshakeCount());
+            stats = String(buf);
+        } else if (CallPapaMode::isScanning()) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "SCANNING... %d FOUND", CallPapaMode::getDeviceCount());
+            stats = String(buf);
+        } else if (CallPapaMode::isSirloinAvailable()) {
+            // Only show PCAP YOUR PHONE message when SIRLOIN is available
+            char buf[48];
+            snprintf(buf, sizeof(buf), "SIRLOIN: %d READY TO PCAP YOUR PHONE", CallPapaMode::getDeviceCount());
+            stats = String(buf);
+        } else {
+            stats = "CALLIN DIS SON OF A PIG...";
+        }
     } else {
         // Default: Networks, Handshakes (D: irrelevant in idle - pig isnt deauthing)
         uint16_t netCount = porkchop.getNetworkCount();

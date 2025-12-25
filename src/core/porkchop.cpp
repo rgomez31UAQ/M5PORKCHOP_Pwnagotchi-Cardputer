@@ -19,6 +19,7 @@
 #include "../modes/warhog.h"
 #include "../modes/piggyblues.h"
 #include "../modes/spectrum.h"
+#include "../modes/call_papa.h"
 #include "../web/fileserver.h"
 #include "config.h"
 #include "xp.h"
@@ -81,6 +82,7 @@ void Porkchop::init() {
         {"DONOHAM", 14, "JAH BLESS DI RX"},
         {"WARHOG", 2, "OSCAR MIKE WITH GPS"},
         {"PIGGY BLUES", 8, "SLAY ON BLEAY"},
+        {"SON OF A PIG", 16, "SYNC FROM SIRLOIN"},
         {"HOG ON SPECTRUM", 10, "NIETZSCHE KNOWS"},
         // === DATA & STATS ===
         {"SWINE STATS", 11, "PIGRESSION"},
@@ -116,6 +118,7 @@ void Porkchop::init() {
             case 13: setMode(PorkchopMode::WIGLE_MENU); break;
             case 14: setMode(PorkchopMode::DNH_MODE); break;
             case 15: setMode(PorkchopMode::UNLOCKABLES); break;
+            case 16: setMode(PorkchopMode::CALL_PAPA_MODE); break;
         }
         Menu::clearSelected();
     });
@@ -217,6 +220,9 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::UNLOCKABLES:
             UnlockablesMenu::hide();
             break;
+        case PorkchopMode::CALL_PAPA_MODE:
+            CallPapaMode::stop();
+            break;
         default:
             break;
     }
@@ -298,6 +304,11 @@ void Porkchop::setMode(PorkchopMode mode) {
             break;
         case PorkchopMode::UNLOCKABLES:
             UnlockablesMenu::show();
+            break;
+        case PorkchopMode::CALL_PAPA_MODE:
+            Avatar::setState(AvatarState::EXCITED);
+            SDLog::log("PORK", "Mode: CALL PAPA");
+            CallPapaMode::start();
             break;
         case PorkchopMode::ABOUT:
             Display::resetAboutState();
@@ -546,6 +557,79 @@ void Porkchop::handleInput() {
         }
     }
     
+    // CALL PAPA mode - device selection and sync control
+    if (currentMode == PorkchopMode::CALL_PAPA_MODE) {
+        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+            setMode(PorkchopMode::IDLE);
+            return;
+        }
+        
+        // Up/Down to select device
+        static bool upWasPressed = false;
+        static bool downWasPressed = false;
+        bool upPressed = M5Cardputer.Keyboard.isKeyPressed(';');
+        bool downPressed = M5Cardputer.Keyboard.isKeyPressed('.');
+        
+        if (upPressed && !upWasPressed) {
+            uint8_t idx = CallPapaMode::getSelectedIndex();
+            if (idx > 0) {
+                CallPapaMode::selectDevice(idx - 1);
+            }
+        }
+        upWasPressed = upPressed;
+        
+        if (downPressed && !downWasPressed) {
+            uint8_t idx = CallPapaMode::getSelectedIndex();
+            if (idx < CallPapaMode::getDeviceCount() - 1) {
+                CallPapaMode::selectDevice(idx + 1);
+            }
+        }
+        downWasPressed = downPressed;
+        
+        // Enter to connect or start sync
+        if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+            if (!CallPapaMode::isConnected()) {
+                // Connect to selected device
+                if (CallPapaMode::getDeviceCount() > 0) {
+                    CallPapaMode::connectTo(CallPapaMode::getSelectedIndex());
+                }
+            } else if (!CallPapaMode::isSyncing()) {
+                // Start sync
+                CallPapaMode::startSync();
+            }
+        }
+        
+        // R to rescan
+        static bool rWasPressed = false;
+        bool rPressed = M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R');
+        if (rPressed && !rWasPressed) {
+            if (!CallPapaMode::isConnected()) {
+                CallPapaMode::startScan();
+            }
+        }
+        rWasPressed = rPressed;
+        
+        // A to abort sync
+        static bool aWasPressed = false;
+        bool aPressed = M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A');
+        if (aPressed && !aWasPressed) {
+            if (CallPapaMode::isSyncing()) {
+                CallPapaMode::abortSync();
+            }
+        }
+        aWasPressed = aPressed;
+        
+        // D to disconnect
+        static bool dcWasPressed = false;
+        bool dcPressed = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
+        if (dcPressed && !dcWasPressed) {
+            if (CallPapaMode::isConnected()) {
+                CallPapaMode::disconnect();
+            }
+        }
+        dcWasPressed = dcPressed;
+    }
+    
     // SPECTRUM mode - Backspace to stop and return to idle
     // BUT: if monitoring a network, let spectrum handle the key to exit monitor first
     if (currentMode == PorkchopMode::SPECTRUM_MODE) {
@@ -628,6 +712,12 @@ void Porkchop::updateMode() {
         case PorkchopMode::UNLOCKABLES:
             UnlockablesMenu::update();
             if (!UnlockablesMenu::isActive()) {
+                setMode(PorkchopMode::MENU);
+            }
+            break;
+        case PorkchopMode::CALL_PAPA_MODE:
+            CallPapaMode::update();
+            if (!CallPapaMode::isRunning()) {
                 setMode(PorkchopMode::MENU);
             }
             break;
