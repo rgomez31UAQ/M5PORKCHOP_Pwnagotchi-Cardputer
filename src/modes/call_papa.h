@@ -68,6 +68,7 @@ public:
     static void abortSync();
     static bool isSyncing();
     static bool isSyncComplete();
+    static bool isSyncDialogueComplete();  // Dialogue complete - triggers auto-exit
     static const SyncProgress& getProgress() { return progress; }
     
     // Remote device info (after HELLO)
@@ -92,9 +93,20 @@ public:
     static void setOnCapture(CaptureCallback cb) { onCaptureCb = cb; }
     static void setOnSyncComplete(SyncCompleteCallback cb) { onSyncCompleteCb = cb; }
     
+    static bool hasValidDevices();
+    
+    // Toast overlay for Son's dialogue
+    static bool isToastActive();
+    static const char* getToastMessage();
+    
+    // Call duration and dialogue phase
+    static uint32_t getCallDuration();     // Get call duration in milliseconds
+    static uint8_t getDialoguePhase();     // Get dialogue phase (0-2=active, 3+=done)
+    
     // Friend declarations for BLE callbacks
     friend void ctrlNotifyCallback(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool);
     friend void dataNotifyCallback(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool);
+    friend void statusNotifyCallback(NimBLERemoteCharacteristic*, uint8_t*, size_t, bool);
     friend class ScanCallbacks;
     friend class ClientCallbacks;
     
@@ -117,11 +129,20 @@ private:
     static uint16_t syncedPMKIDs;
     static uint16_t syncedHandshakes;
     
+    // Status characteristic state
+    static bool readyFlagReceived;
+    static uint16_t remotePendingCount;
+    static uint32_t connectionStartTime;
+    static uint32_t lastScanTime;
+    static uint32_t lastTimeoutTime;  // Track when we last timed out
+    static NimBLEAddress lastTimeoutDevice;  // Track which device we timed out on
+    
     // State
     enum class State {
         IDLE,
         SCANNING,
         CONNECTING,
+        CONNECTED_WAITING_READY,  // Waiting for READY flag from Status
         CONNECTED,
         SYNCING,
         WAITING_CHUNKS,
@@ -159,5 +180,5 @@ private:
     
     // Constants
     static const uint16_t RX_BUFFER_SIZE = 2048;
-    static const uint16_t SCAN_DURATION = 10;  // seconds
+    static const uint16_t SCAN_DURATION = 2;  // seconds - auto-retry every 2s until Sirloin found
 };

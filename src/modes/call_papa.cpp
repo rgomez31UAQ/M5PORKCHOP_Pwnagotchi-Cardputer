@@ -44,6 +44,10 @@
 // Chunk size (must match Sirloin)
 #define CHUNK_SIZE          17
 
+// Protocol magic bytes (must match Sirloin)
+#define STATUS_MAGIC_P      0x50  // 'P'
+#define STATUS_MAGIC_C      0x43  // 'C'
+
 // Static member initialization
 bool CallPapaMode::running = false;
 bool CallPapaMode::bleInitialized = false;
@@ -61,6 +65,13 @@ uint16_t CallPapaMode::remoteHSCount = 0;
 uint16_t CallPapaMode::totalSynced = 0;
 uint16_t CallPapaMode::syncedPMKIDs = 0;
 uint16_t CallPapaMode::syncedHandshakes = 0;
+
+bool CallPapaMode::readyFlagReceived = false;
+uint16_t CallPapaMode::remotePendingCount = 0;
+uint32_t CallPapaMode::connectionStartTime = 0;
+uint32_t CallPapaMode::lastScanTime = 0;
+uint32_t CallPapaMode::lastTimeoutTime = 0;
+NimBLEAddress CallPapaMode::lastTimeoutDevice;  // Default constructor
 
 CallPapaMode::State CallPapaMode::state = CallPapaMode::State::IDLE;
 
@@ -95,39 +106,55 @@ static std::atomic<DialogueState> dialogueState{DialogueState::IDLE};
 static std::atomic<uint32_t> dialogueTimer{0};
 static const uint32_t DIALOGUE_DELAY_MS = 2500;
 
+// Toast state for Son's dialogue (non-blocking)
+static String toastMessage = "";
+static uint32_t toastStartTime = 0;
+static bool toastActive = false;
+static const uint32_t TOAST_DURATION_MS = 2500;
+
+// Mutex for race condition protection between BLE callbacks and main loop
+static portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Pending event flags - set in BLE callbacks, processed in main loop
+// Protected by pendingMux for atomic read-modify-write
+static volatile bool pendingHelloReceived = false;
+static volatile uint16_t pendingPMKIDCount = 0;
+static volatile uint16_t pendingHSCount = 0;
+static volatile uint8_t pendingDialogueId = 0;
+
 // Porkchop responses to RSP_HELLO (Papa's voice - Maximum Dysfunction)
 static const char* PAPA_HELLO_RESPONSES[] = {
     "ABOUT TIME YOU SHOWED UP",
-    "WHERES MY MILK MONEY",
-    "THIS BETTER BE GOOD NEWS"
+    "WHERES MY PMKID MONEY",
+    "NOT SKID LOOT I HOPE"
 };
 
 // Porkchop responses on sync complete (Papa's voice - Inheritance jokes)
 static const char* PAPA_COMPLETE_RESPONSES[] = {
     "MAYBE YOU AINT WORTHLESS",
-    "ILL THINK ABOUT THE WILL",
-    "TEXT ME NEVER"
+    "ADDED TO INHERITANCE.TXT",
+    "DISCONNECT BEFORE I REGRET IT"
 };
 
 // Sirloin responses to HELLO (Son's voice - shown as Toast on Porkchop)
 static const char* SON_HELLO_RESPONSES[] = {
     "PAPA ITS YOUR FAVORITE MISTAKE",
-    "FINALLY GOT SOMETHING",
+    "SURPRISE IM NOT IN JAIL",
     "DONT HANG UP ON ME"
 };
 
 // Sirloin responses on sync complete (Son's voice - shown as Toast on Porkchop)
 static const char* SON_COMPLETE_RESPONSES[] = {
     "SAME BLE TIME NEXT YEAR",
-    "OFF TO BUY CIGARETTES",
-    "THANKS FOR NOTHING"
+    "BYE OLD MAN",
+    "/DEV/NULL YOUR CALLS"
 };
 
 // Papa's ROAST responses for 0 captures (Maximum Dysfunction)
 static const char* PAPA_ROAST_RESPONSES[] = {
-    "LEFT FOR MILK CAME BACK EMPTY",
+    "ZERO PMKIDS? NOT MY SON",
     "FAMILY TRADITION OF FAILURE",
-    "ADOPTION PAPERS PENDING"
+    "SHOULD HAVE COMPILED YOU OUT"
 };
 
 // ============================================================================
@@ -156,6 +183,7 @@ uint32_t CallPapaMode::calculateCRC32(const uint8_t* data, uint16_t len) {
 // Called when Control characteristic notifies (responses from Sirloin)
 void ctrlNotifyCallback(NimBLERemoteCharacteristic* pChar,
                                 uint8_t* pData, size_t length, bool isNotify) {
+    Serial.printf("[DEBUG-CB] >>> ctrlNotifyCallback ENTRY (length=%d, isNotify=%d)\n", length, isNotify);
     if (length < 1) return;
     if (!CallPapaMode::isRunning()) return;  // Guard: don't process if stopped
     
@@ -164,25 +192,31 @@ void ctrlNotifyCallback(NimBLERemoteCharacteristic* pChar,
     switch (rsp) {
         case RSP_HELLO:
             if (length >= 6) {
-                CallPapaMode::remotePMKIDCount = pData[2] | (pData[3] << 8);
-                CallPapaMode::remoteHSCount = pData[4] | (pData[5] << 8);
+                // Parse RSP_HELLO: [rsp][version][pmkid_lo][pmkid_hi][hs_lo][hs_hi][flags][dialogue_id]
+                uint8_t version = (length >= 2) ? pData[1] : 0;
+                
+                // Store in pending variables - will be processed in main loop
+                // Protected by mutex for safe cross-context access
+                taskENTER_CRITICAL(&pendingMux);
+                pendingPMKIDCount = pData[2] | (pData[3] << 8);
+                pendingHSCount = pData[4] | (pData[5] << 8);
                 
                 // Get dialogue_id from extended RSP_HELLO (byte 7) or random fallback
                 if (length >= 8) {
-                    currentDialogueId = pData[7] % 3;  // Sirloin picked it
+                    pendingDialogueId = pData[7] % 3;  // Sirloin picked it
                 } else {
-                    currentDialogueId = random(0, 3);  // Fallback: we pick
+                    pendingDialogueId = random(0, 3);  // Fallback: we pick
+                }
+                pendingHelloReceived = true;
+                taskEXIT_CRITICAL(&pendingMux);
+                
+                // Protocol version check (spec expects 0x01)
+                if (version != 0x01) {
+                    Serial.printf("[SON-OF-PIG] WARNING: Protocol version mismatch! Expected 0x01, got 0x%02X\n", version);
                 }
                 
-                Serial.printf("[SON-OF-PIG] HELLO: %d PMKIDs, %d Handshakes, dialogue=%d\n", 
-                              CallPapaMode::remotePMKIDCount, CallPapaMode::remoteHSCount, currentDialogueId);
-                
-                // Start dialogue state machine (runs in update loop, not here!)
-                // Set timer FIRST to avoid race condition with update() loop
-                // std::atomic provides proper memory ordering (sequential consistency)
-                dialogueTimer = millis();
-                dialogueState = DialogueState::HELLO_PAPA;
-                Mood::setStatusMessage(PAPA_HELLO_RESPONSES[currentDialogueId]);
+                Serial.printf("[SON-OF-PIG] HELLO: version=0x%02X, %d PMKIDs, %d Handshakes, dialogue=%d\n", 
+                              version, pendingPMKIDCount, pendingHSCount, pendingDialogueId);
             }
             break;
             
@@ -230,6 +264,13 @@ void ctrlNotifyCallback(NimBLERemoteCharacteristic* pChar,
             if (length >= 2) {
                 Serial.printf("[SON-OF-PIG] Purged %d captures\n", pData[1]);
             }
+            // Ensure dialogue progresses reliably when purge completes
+            if (dialogueState == DialogueState::GOODBYE_PAPA) {
+                Serial.println("[SON-OF-PIG] RSP_PURGED received - advancing dialogue to GOODBYE_SON");
+                dialogueTimer = millis();
+                __asm__ __volatile__("" ::: "memory");
+                dialogueState = DialogueState::GOODBYE_SON;
+            }
             break;
     }
 }
@@ -237,6 +278,7 @@ void ctrlNotifyCallback(NimBLERemoteCharacteristic* pChar,
 // Called when Data characteristic notifies (capture chunks from Sirloin)
 void dataNotifyCallback(NimBLERemoteCharacteristic* pChar,
                                 uint8_t* pData, size_t length, bool isNotify) {
+    Serial.printf("[DEBUG-CB] >>> dataNotifyCallback ENTRY (length=%d, isNotify=%d)\n", length, isNotify);
     if (length < 2) return;
     if (!CallPapaMode::isRunning()) return;  // Guard: don't process if stopped
     
@@ -274,6 +316,8 @@ void dataNotifyCallback(NimBLERemoteCharacteristic* pChar,
             }
             
             // Mark synced on Sirloin
+            Serial.printf("[SON-OF-PIG] ===== SENDING CMD_MARK_SYNCED: type=0x%02X index=%d totalSynced=%d =====\n",
+                          CallPapaMode::currentType, CallPapaMode::currentIndex, CallPapaMode::totalSynced);
             CallPapaMode::sendCommand(CMD_MARK_SYNCED, CallPapaMode::currentType, CallPapaMode::currentIndex);
             
             // Request next capture
@@ -315,6 +359,64 @@ void dataNotifyCallback(NimBLERemoteCharacteristic* pChar,
     }
 }
 
+// Called when Status characteristic notifies (state updates from Sirloin)
+void statusNotifyCallback(NimBLERemoteCharacteristic* pChar,
+                          uint8_t* pData, size_t length, bool isNotify) {
+    Serial.printf("[DEBUG-CB] >>> statusNotifyCallback ENTRY (length=%d, isNotify=%d)\n", length, isNotify);
+    if (!CallPapaMode::isRunning()) return;  // Guard: don't process if stopped
+    
+    // Status structure: [0x50][0x43][pending_lo][pending_hi][flags][0x00]
+    if (length < 6) {
+        Serial.printf("[SON-OF-PIG] Invalid status notification length: %d\n", length);
+        return;
+    }
+    
+    // DEBUG: Print raw Status bytes
+    Serial.printf("[SON-OF-PIG] Status RAW: [0x%02X][0x%02X][0x%02X][0x%02X][0x%02X][0x%02X]\n",
+                  pData[0], pData[1], pData[2], pData[3], pData[4], pData[5]);
+    
+    // Verify protocol magic
+    if (pData[0] != STATUS_MAGIC_P || pData[1] != STATUS_MAGIC_C) {
+        Serial.printf("[SON-OF-PIG] Invalid status magic: 0x%02X 0x%02X\n", pData[0], pData[1]);
+        return;
+    }
+    
+    // Parse status fields
+    uint16_t pending = pData[2] | (pData[3] << 8);
+    uint8_t flags = pData[4];
+    
+    bool ready = (flags & 0x04) != 0;     // READY flag
+    bool syncing = (flags & 0x01) != 0;   // SYNCING flag
+    bool bufferFull = (flags & 0x02) != 0; // BUFFER_FULL flag
+    
+    CallPapaMode::remotePendingCount = pending;
+    
+    Serial.printf("[SON-OF-PIG] Status: pending=%d, ready=%d, syncing=%d, bufferFull=%d\n",
+                  pending, ready, syncing, bufferFull);
+    
+    // Update UI with buffer full warning
+    if (bufferFull) {
+        Mood::setStatusMessage("SIRLOIN BUFFER FULL!");
+        Serial.println("[SON-OF-PIG] WARNING: Sirloin buffer at capacity (256 captures)");
+    }
+    
+    // CRITICAL: Wait for READY flag before sending CMD_HELLO
+    if (ready && !CallPapaMode::readyFlagReceived) {
+        CallPapaMode::readyFlagReceived = true;
+        Serial.println("[SON-OF-PIG] READY flag received! User accepted call. Sending CMD_HELLO...");
+        
+        // Update state and send HELLO
+        CallPapaMode::state = CallPapaMode::State::CONNECTED;
+        Mood::setStatusMessage("CALL ACCEPTED!");
+        
+        // Send CMD_HELLO now that we're ready (no delay in callback!)
+        CallPapaMode::sendCommand(CMD_HELLO);
+    } else if (!ready && CallPapaMode::state == CallPapaMode::State::CONNECTED_WAITING_READY) {
+        // Still waiting for user to accept
+        Serial.println("[SON-OF-PIG] Still waiting for user to accept call...");
+    }
+}
+
 // ============================================================================
 // SCAN CALLBACK
 // ============================================================================
@@ -341,11 +443,31 @@ public:
         }
         
         // Look for SIRLOIN by name or service UUID
+        bool isSirloin = false;
+        std::string deviceName = "";
+        
+        // Check by name first
         if (device->haveName()) {
             std::string name = device->getName();
+            deviceName = name;
             if (name.find("SIRLOIN") != std::string::npos) {
-                Serial.printf("[SON-OF-PIG] Found SIRLOIN: %s\n", 
+                isSirloin = true;
+                Serial.printf("[SON-OF-PIG] Found SIRLOIN by name: %s\n", 
                               device->getAddress().toString().c_str());
+            }
+        }
+        
+        // Check by service UUID if not found by name
+        if (!isSirloin && device->isAdvertisingService(NimBLEUUID(SERVICE_UUID))) {
+            isSirloin = true;
+            if (deviceName.empty()) {
+                deviceName = "SIRLOIN";  // Default name if no name advertised
+            }
+            Serial.printf("[SON-OF-PIG] Found SIRLOIN by service UUID: %s\n", 
+                          device->getAddress().toString().c_str());
+        }
+        
+        if (isSirloin) {
                 
                 // Check if already in list
                 NimBLEAddress addr = device->getAddress();
@@ -380,7 +502,7 @@ public:
                 newDevice.syncing = false;
                 
                 // Copy name
-                strncpy(newDevice.name, name.c_str(), sizeof(newDevice.name) - 1);
+                strncpy(newDevice.name, deviceName.c_str(), sizeof(newDevice.name) - 1);
                 newDevice.name[sizeof(newDevice.name) - 1] = '\0';
                 
                 // Parse manufacturer data
@@ -398,30 +520,21 @@ public:
                 Serial.printf("[SON-OF-PIG] Added Sirloin: %s (%d dBm, %d captures)\n",
                               addr.toString().c_str(), newDevice.rssi, newDevice.pendingCaptures);
             }
-        }
     }
     
     void onScanEnd(const NimBLEScanResults& results, int reason) override {
-        if (!CallPapaMode::isRunning()) return;  // Guard: don't process if stopped
-        Serial.printf("[SON-OF-PIG] Scan ended, found %d Sirloin devices\n", 
-                      (int)CallPapaMode::getDeviceCount());
+        if (!CallPapaMode::isRunning()) return;
+        // With continuous scanning (duration=0), this should rarely/never be called
+        // Only happens if scan is explicitly stopped or errors out
+        Serial.printf("[SON-OF-PIG] Scan ended unexpectedly (reason: %d), found %d Sirloin devices\n", 
+                      reason, (int)CallPapaMode::getDeviceCount());
         CallPapaMode::setScanningState(false);
         
-        // AUTO-CALLING: Papa immediately calls first Son with loot
-        auto& devs = CallPapaMode::getDevicesMutable();
-        if (!devs.empty() && !CallPapaMode::isConnected()) {
-            // Find first device with pending captures
-            for (size_t i = 0; i < devs.size(); i++) {
-                if (devs[i].pendingCaptures > 0 && !devs[i].syncing) {
-                    Serial.printf("[SON-OF-PIG] AUTO-CALLING %s (%d captures pending)\n",
-                                  devs[i].address.toString().c_str(), devs[i].pendingCaptures);
-                    CallPapaMode::connectTo(i);
-                    return;  // Exit after initiating connection
-                }
-            }
-            // No devices with loot - call first anyway to check
-            Serial.println("[SON-OF-PIG] AUTO-CALLING first device (no advertised loot)");
-            CallPapaMode::connectTo(0);
+        // Try to restart scan if mode is still running
+        if (CallPapaMode::isRunning() && !CallPapaMode::isConnected()) {
+            Serial.println("[SON-OF-PIG] Restarting continuous scan...");
+            delay(100);
+            CallPapaMode::startScan();
         }
     }
 };
@@ -434,18 +547,36 @@ static ScanCallbacks scanCallbacks;
 
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* pClient) override {
+        Serial.println("[DEBUG-CB] *** onConnect CALLBACK FIRED ***");
+        Serial.printf("[DEBUG-CB] Client address: %s\n", pClient->getPeerAddress().toString().c_str());
         if (!CallPapaMode::isRunning()) return;  // Guard
         Serial.println("[SON-OF-PIG] Connected to Sirloin!");
-        CallPapaMode::state = CallPapaMode::State::CONNECTED;
+        // DON'T set state here - it will be set in connectTo() after subscriptions
+        // CallPapaMode::state = CallPapaMode::State::CONNECTED;  // REMOVED - causes race condition
     }
     
     void onDisconnect(NimBLEClient* pClient, int reason) override {
+        Serial.println("[DEBUG-CB] !!! onDisconnect CALLBACK FIRED !!!");
+        Serial.printf("[DEBUG-CB] Disconnect reason code: %d\n", reason);
+        Serial.printf("[DEBUG-CB] Time since boot: %lu ms\n", millis());
         Serial.printf("[SON-OF-PIG] Disconnected from Sirloin (reason: %d)\n", reason);
         CallPapaMode::state = CallPapaMode::State::IDLE;
         CallPapaMode::pCtrlChar = nullptr;
         CallPapaMode::pDataChar = nullptr;
         CallPapaMode::pStatusChar = nullptr;
         CallPapaMode::progress.inProgress = false;
+        
+        // Reset dialogue state to prevent stale state on reconnect
+        dialogueState = DialogueState::IDLE;
+        dialogueTimer = 0;
+        
+        // Reset pending flags (with mutex protection)
+        taskENTER_CRITICAL(&pendingMux);
+        pendingHelloReceived = false;
+        pendingPMKIDCount = 0;
+        pendingHSCount = 0;
+        pendingDialogueId = 0;
+        taskEXIT_CRITICAL(&pendingMux);
         
         // Only process if still running
         if (!CallPapaMode::isRunning()) return;
@@ -557,6 +688,10 @@ void CallPapaMode::init() {
     totalSynced = 0;
     syncedPMKIDs = 0;
     syncedHandshakes = 0;
+    readyFlagReceived = false;
+    remotePendingCount = 0;
+    connectionStartTime = 0;
+    lastScanTime = 0;
     progress = {0};
     currentType = 0;
     currentIndex = 0;
@@ -564,6 +699,12 @@ void CallPapaMode::init() {
     lastError[0] = '\0';
     dialogueState = DialogueState::IDLE;
     dialogueTimer = 0;
+    
+    // Reset pending event flags
+    pendingHelloReceived = false;
+    pendingPMKIDCount = 0;
+    pendingHSCount = 0;
+    pendingDialogueId = 0;
 }
 
 void CallPapaMode::start() {
@@ -592,9 +733,9 @@ void CallPapaMode::start() {
         pClient->setClientCallbacks(&clientCallbacks);
         
         // Configure connection parameters (more relaxed for better compatibility)
-        // min=24 (30ms), max=40 (50ms), latency=0, timeout=400 (4s)
-        pClient->setConnectionParams(24, 40, 0, 400);
-        pClient->setConnectTimeout(15);  // 15 seconds
+        // min=24 (30ms), max=40 (50ms), latency=0, timeout=3200 (32s max allowed)
+        pClient->setConnectionParams(24, 40, 0, 3200);
+        pClient->setConnectTimeout(180);  // 3 minutes - wait for user to accept call
     }
     
     Serial.println("[SON-OF-PIG] BLE Ready");
@@ -612,7 +753,10 @@ void CallPapaMode::start() {
 void CallPapaMode::stop() {
     if (!running) return;
     
-    Serial.println("[SON-OF-PIG] Stopping...");
+    Serial.println("[SON-OF-PIG] ========== STOP() CALLED ==========");
+    Serial.printf("[SON-OF-PIG] STOP: state=%d, dialogueState=%d\n", (int)state, (int)dialogueState.load());
+    // Print stack trace hint
+    Serial.printf("[SON-OF-PIG] STOP called at millis=%lu\n", millis());
     
     // Disconnect if connected
     disconnect();
@@ -641,14 +785,156 @@ void CallPapaMode::update() {
     
     uint32_t now = millis();
     
+    // === AUTO-CONNECT WHEN SIRLOIN FOUND ===
+    // Check every 500ms if we have devices and should auto-connect
+    static uint32_t lastConnectCheck = 0;
+    if (state == State::SCANNING && (now - lastConnectCheck) >= 500) {
+        lastConnectCheck = now;
+        
+        auto& devs = getDevicesMutable();
+        if (!devs.empty()) {
+            // Find first device with pending captures (that's not in cooldown)
+            int bestIdx = -1;
+            for (size_t i = 0; i < devs.size(); i++) {
+                // Check cooldown: skip device if we timed out on it within last 15 seconds
+                if (lastTimeoutTime > 0 && (now - lastTimeoutTime) < 15000) {
+                    if (devs[i].address == lastTimeoutDevice) {
+                        uint32_t remainingCooldown = 15000 - (now - lastTimeoutTime);
+                        Serial.printf("[SON-OF-PIG] Device %s in cooldown (%lu ms remaining)\n",
+                                      devs[i].address.toString().c_str(), remainingCooldown);
+                        continue;  // Skip this device
+                    }
+                }
+                
+                if (devs[i].pendingCaptures > 0 && !devs[i].syncing) {
+                    bestIdx = i;
+                    Serial.printf("[SON-OF-PIG] AUTO-CALLING %s (%d captures pending)\n",
+                                  devs[i].address.toString().c_str(), devs[i].pendingCaptures);
+                    break;
+                }
+            }
+            
+            // No devices with loot - call first anyway to check (if not in cooldown)
+            if (bestIdx == -1 && state == State::SCANNING) {
+                // Check if first device is in cooldown
+                if (lastTimeoutTime > 0 && (now - lastTimeoutTime) < 15000 && 
+                    devs[0].address == lastTimeoutDevice) {
+                    uint32_t remainingCooldown = 15000 - (now - lastTimeoutTime);
+                    Serial.printf("[SON-OF-PIG] Only device in cooldown (%lu ms remaining)\n", remainingCooldown);
+                } else {
+                    bestIdx = 0;
+                    Serial.println("[SON-OF-PIG] AUTO-CALLING first device (no advertised loot)");
+                }
+            }
+            
+            if (bestIdx >= 0) {
+                connectTo(bestIdx);
+            }
+        }
+    }
+    
+    // === ERROR STATE RECOVERY ===
+    // If connection fails, restart scanning after 2 seconds
+    static uint32_t errorTime = 0;
+    if (state == State::ERROR) {
+        if (errorTime == 0) {
+            errorTime = now;
+            Serial.println("[SON-OF-PIG] Entered ERROR state, will retry in 2 seconds...");
+        } else if ((now - errorTime) >= 2000) {
+            Serial.println("[SON-OF-PIG] Recovering from ERROR state, restarting scan...");
+            errorTime = 0;
+            state = State::IDLE;
+            startScan();
+        }
+    } else if (errorTime != 0) {
+        // Reset error timer if we left error state
+        errorTime = 0;
+    }
+    
+    // === TIMEOUT HANDLING FOR CALL ACCEPTANCE ===
+    // Extended timeout: 3 minutes to give user time to notice and accept
+    if (state == State::CONNECTED_WAITING_READY) {
+        // CRITICAL: Refresh 'now' because connectTo() may have been called earlier 
+        // in this same update() cycle, and 'now' would be stale (causing underflow)
+        now = millis();
+        
+        // Guard against underflow: if connectionStartTime is in the future, skip check
+        // This can happen on the same update() cycle where connectTo() just finished
+        if (connectionStartTime > now) {
+            // Skip - will check on next cycle
+        } else {
+            uint32_t elapsed = now - connectionStartTime;
+            if (!readyFlagReceived && elapsed > 180000) {
+                Serial.printf("[SON-OF-PIG] TIMEOUT: elapsed=%lu ms > 180000ms\n", elapsed);
+                snprintf(lastError, sizeof(lastError), "Call acceptance timeout");
+                Mood::setStatusMessage("CALL TIMEOUT - DISCONNECTING");
+                
+                // Track this timeout to prevent immediate reconnection
+                if (pClient && pClient->isConnected()) {
+                    lastTimeoutDevice = pClient->getPeerAddress();
+                    lastTimeoutTime = now;
+                    Serial.printf("[SON-OF-PIG] Setting 15-second cooldown for device %s\n", 
+                                  lastTimeoutDevice.toString().c_str());
+                }
+                
+                disconnect();
+                return;
+            }
+        }
+    }
+    
+    // === PROCESS PENDING EVENTS FROM BLE CALLBACKS ===
+    // This safely moves state changes from callback context to main loop
+    // Protected by mutex to prevent race with BLE callback
+    bool helloPending = false;
+    uint16_t localPMKIDCount = 0, localHSCount = 0;
+    uint8_t localDialogueId = 0;
+    
+    taskENTER_CRITICAL(&pendingMux);
+    if (pendingHelloReceived) {
+        helloPending = true;
+        localPMKIDCount = pendingPMKIDCount;
+        localHSCount = pendingHSCount;
+        localDialogueId = pendingDialogueId;
+        pendingHelloReceived = false;
+    }
+    taskEXIT_CRITICAL(&pendingMux);
+    
+    if (helloPending) {
+        // Copy local values to main state
+        remotePMKIDCount = localPMKIDCount;
+        remoteHSCount = localHSCount;
+        currentDialogueId = localDialogueId;
+        
+        // Reset connectionStartTime when dialogue actually starts
+        connectionStartTime = millis();
+        
+        // NOW start dialogue state machine (safe in main loop)
+        dialogueTimer = now;
+        dialogueState = DialogueState::HELLO_PAPA;
+        Mood::setStatusMessage(PAPA_HELLO_RESPONSES[currentDialogueId]);
+        
+        Serial.printf("[SON-OF-PIG] Dialogue started: Papa says '%s'\n", 
+                     PAPA_HELLO_RESPONSES[currentDialogueId]);
+    }
+    
     // === DIALOGUE STATE MACHINE ===
     // Process dialogue exchanges without blocking BLE callbacks
     if (dialogueState != DialogueState::IDLE && dialogueState != DialogueState::SYNC_RUNNING) {
+        // Watchdog: if stuck in GOODBYE phase for >10s, force completion
+        if ((dialogueState == DialogueState::GOODBYE_PAPA || dialogueState == DialogueState::GOODBYE_SON) && 
+            now - dialogueTimer > 10000) {
+            Serial.println("[SON-OF-PIG] WATCHDOG: Dialogue stuck in GOODBYE phase, forcing DONE");
+            dialogueState = DialogueState::DONE;
+        }
+        
         if (now - dialogueTimer >= DIALOGUE_DELAY_MS) {
             switch (dialogueState) {
                 case DialogueState::HELLO_PAPA:
-                    // Papa spoke, now Son responds
-                    Display::showToast(SON_HELLO_RESPONSES[currentDialogueId]);
+                    // Papa spoke, now Son responds (toast overlay)
+                    toastMessage = "SON: " + String(SON_HELLO_RESPONSES[currentDialogueId]);
+                    toastStartTime = now;
+                    toastActive = true;
                     dialogueState = DialogueState::HELLO_SON;
                     dialogueTimer = now;
                     break;
@@ -665,14 +951,28 @@ void CallPapaMode::update() {
                     break;
                     
                 case DialogueState::HELLO_LOOT:
-                    // Loot shown, start sync
-                    dialogueState = DialogueState::SYNC_RUNNING;
-                    startSync();
+                    // Loot shown, start sync - but validate connection first!
+                    if (state == State::CONNECTED) {
+                        dialogueState = DialogueState::SYNC_RUNNING;
+                        if (!startSync()) {
+                            // Sync failed - show error and go to done
+                            Serial.println("[SON-OF-PIG] startSync() failed during dialogue!");
+                            Mood::setStatusMessage("SYNC FAILED!");
+                            dialogueState = DialogueState::DONE;
+                        }
+                    } else {
+                        // Connection lost during dialogue
+                        Serial.printf("[SON-OF-PIG] Connection lost during dialogue (state=%d)\n", (int)state);
+                        Mood::setStatusMessage("CONNECTION LOST!");
+                        dialogueState = DialogueState::DONE;
+                    }
                     break;
                     
                 case DialogueState::GOODBYE_PAPA:
-                    // Papa spoke, now Son responds
-                    Display::showToast(SON_COMPLETE_RESPONSES[currentDialogueId]);
+                    // Papa spoke, now Son responds (toast overlay)
+                    toastMessage = "SON: " + String(SON_COMPLETE_RESPONSES[currentDialogueId]);
+                    toastStartTime = now;
+                    toastActive = true;
                     dialogueState = DialogueState::GOODBYE_SON;
                     dialogueTimer = now;
                     break;
@@ -700,12 +1000,13 @@ void CallPapaMode::update() {
 
 void CallPapaMode::startScan() {
     if (state == State::SCANNING) return;
-    if (state == State::CONNECTED || state == State::SYNCING || state == State::WAITING_CHUNKS) return;
+    if (state == State::CONNECTED_WAITING_READY || state == State::CONNECTED || 
+        state == State::SYNCING || state == State::WAITING_CHUNKS) return;
     
-    Serial.println("[SON-OF-PIG] Starting BLE scan...");
+    Serial.println("[SON-OF-PIG] Starting CONTINUOUS BLE scan...");
     
-    // Clear previously seen devices so we don't auto-connect to stale entries
-    devices.clear();
+    // DON'T clear devices - keep accumulating discovered devices
+    // devices.clear();  // REMOVED - maintain device list across scan
     
     if (!bleInitialized) {
         Serial.println("[SON-OF-PIG] BLE not initialized!");
@@ -718,18 +1019,21 @@ void CallPapaMode::startScan() {
         return;
     }
     
-    pScan->clearResults();
+    // Don't clear results - we want to keep seeing devices
+    // pScan->clearResults();  // REMOVED - keep accumulated results
     pScan->setActiveScan(true);
     pScan->setInterval(100);
     pScan->setWindow(99);
-    pScan->setDuplicateFilter(false);
+    pScan->setDuplicateFilter(false);  // We want to see every advertisement
     
     // Register callbacks - MUST be done before start()
     pScan->setScanCallbacks(&scanCallbacks, false);
     
-    if (pScan->start(SCAN_DURATION, false, false)) {
+    // Start continuous scan (duration=0 means indefinite/continuous)
+    if (pScan->start(0, false, false)) {
         state = State::SCANNING;
-        Serial.println("[SON-OF-PIG] Scan started");
+        lastScanTime = millis();
+        Serial.println("[SON-OF-PIG] Continuous scan started (will run indefinitely)");
     } else {
         Serial.println("[SON-OF-PIG] Failed to start scan");
     }
@@ -813,52 +1117,163 @@ bool CallPapaMode::connectTo(uint8_t deviceIndex) {
     
     if (!connected) {
         snprintf(lastError, sizeof(lastError), "Connection failed after 3 attempts");
+        Serial.printf("[SON-OF-PIG] ERROR: %s\n", lastError);
         state = State::ERROR;
+        // Scanning will be restarted by update() ERROR recovery logic
         return false;
     }
     
+    uint32_t connTime = millis();
+    Serial.printf("[DEBUG] T+%lu: Physical connection established\n", millis() - connTime);
+    Serial.printf("[DEBUG] T+%lu: Client connected status: %d\n", millis() - connTime, pClient->isConnected());
+    Serial.printf("[DEBUG] T+%lu: Waiting 500ms for BLE stack to settle...\n", millis() - connTime);
+    delay(500);
+    Serial.printf("[DEBUG] T+%lu: After delay - still connected: %d\n", millis() - connTime, pClient->isConnected());
+    
     // Get service
+    Serial.printf("[DEBUG] T+%lu: Getting service %s...\n", millis() - connTime, SERVICE_UUID);
     NimBLERemoteService* pService = pClient->getService(SERVICE_UUID);
     if (!pService) {
         snprintf(lastError, sizeof(lastError), "Service not found");
+        Serial.printf("[SON-OF-PIG] ERROR: %s\n", lastError);
         pClient->disconnect();
         state = State::ERROR;
+        // Scanning will be restarted by update() ERROR recovery logic
         return false;
     }
+    Serial.printf("[DEBUG] T+%lu: Service found at %p\n", millis() - connTime, pService);
     
     // Get characteristics
+    Serial.printf("[DEBUG] T+%lu: Getting Control characteristic...\n", millis() - connTime);
     pCtrlChar = pService->getCharacteristic(CTRL_CHAR_UUID);
-    pDataChar = pService->getCharacteristic(DATA_CHAR_UUID);
-    pStatusChar = pService->getCharacteristic(STATUS_CHAR_UUID);
+    Serial.printf("[DEBUG] T+%lu: Control char at %p\n", millis() - connTime, pCtrlChar);
     
-    if (!pCtrlChar || !pDataChar) {
+    Serial.printf("[DEBUG] T+%lu: Getting Data characteristic...\n", millis() - connTime);
+    pDataChar = pService->getCharacteristic(DATA_CHAR_UUID);
+    Serial.printf("[DEBUG] T+%lu: Data char at %p\n", millis() - connTime, pDataChar);
+    
+    Serial.printf("[DEBUG] T+%lu: Getting Status characteristic...\n", millis() - connTime);
+    pStatusChar = pService->getCharacteristic(STATUS_CHAR_UUID);
+    Serial.printf("[DEBUG] T+%lu: Status char at %p\n", millis() - connTime, pStatusChar);
+    
+    if (!pCtrlChar || !pDataChar || !pStatusChar) {
         snprintf(lastError, sizeof(lastError), "Characteristics not found");
+        Serial.printf("[SON-OF-PIG] ERROR: %s (pCtrl=%p, pData=%p, pStatus=%p)\n", 
+                      lastError, pCtrlChar, pDataChar, pStatusChar);
+        pClient->disconnect();
+        state = State::ERROR;
+        // Scanning will be restarted by update() ERROR recovery logic
+        return false;
+    }
+    
+    Serial.printf("[DEBUG] T+%lu: All characteristics found, checking properties...\n", millis() - connTime);
+    Serial.printf("[DEBUG] T+%lu: Status canNotify: %d\n", millis() - connTime, pStatusChar->canNotify());
+    Serial.printf("[DEBUG] T+%lu: Control canNotify: %d\n", millis() - connTime, pCtrlChar->canNotify());
+    Serial.printf("[DEBUG] T+%lu: Data canNotify: %d\n", millis() - connTime, pDataChar->canNotify());
+    Serial.printf("[DEBUG] T+%lu: Waiting 200ms before subscribing...\n", millis() - connTime);
+    delay(200);
+    Serial.printf("[DEBUG] T+%lu: Still connected after delay: %d\n", millis() - connTime, pClient->isConnected());
+    
+    // CRITICAL FIX: Check if we got disconnected during delay (prevents crash)
+    if (!pClient->isConnected()) {
+        Serial.println("[SON-OF-PIG] ERROR: Disconnected during setup - aborting");
+        snprintf(lastError, sizeof(lastError), "Disconnected during setup");
+        state = State::ERROR;
+        return false;
+    }
+    
+    // CRITICAL: Subscribe to Status characteristic FIRST (per protocol spec)
+    // Status must be subscribed before Control and Data to receive READY flag
+    Serial.printf("[DEBUG] T+%lu: === STARTING STATUS SUBSCRIPTION ===\n", millis() - connTime);
+    if (pStatusChar->canNotify()) {
+        Serial.printf("[DEBUG] T+%lu: Status can notify, attempting subscribe...\n", millis() - connTime);
+        if (pStatusChar->subscribe(true, statusNotifyCallback)) {
+            Serial.printf("[DEBUG] T+%lu: *** Status subscription SUCCESS ***\n", millis() - connTime);
+            Serial.printf("[DEBUG] T+%lu: Connected after Status sub: %d\n", millis() - connTime, pClient->isConnected());
+        } else {
+            Serial.printf("[DEBUG] T+%lu: !!! Status subscription FAILED !!!\n", millis() - connTime);
+            snprintf(lastError, sizeof(lastError), "Status subscribe failed");
+            pClient->disconnect();
+            state = State::ERROR;
+            return false;
+        }
+    } else {
+        Serial.printf("[DEBUG] T+%lu: !!! Status cannot notify !!!\n", millis() - connTime);
+        snprintf(lastError, sizeof(lastError), "Status char not notifiable");
         pClient->disconnect();
         state = State::ERROR;
         return false;
     }
     
-    // Subscribe to notifications
+    // Subscribe to Control and Data notifications
+    Serial.printf("[DEBUG] T+%lu: === STARTING CONTROL SUBSCRIPTION ===\n", millis() - connTime);
     if (pCtrlChar->canNotify()) {
-        pCtrlChar->subscribe(true, ctrlNotifyCallback);
+        Serial.printf("[DEBUG] T+%lu: Control can notify, attempting subscribe...\n", millis() - connTime);
+        if (pCtrlChar->subscribe(true, ctrlNotifyCallback)) {
+            Serial.printf("[DEBUG] T+%lu: *** Control subscription SUCCESS ***\n", millis() - connTime);
+            Serial.printf("[DEBUG] T+%lu: Connected after Control sub: %d\n", millis() - connTime, pClient->isConnected());
+        } else {
+            Serial.printf("[DEBUG] T+%lu: !!! Control subscription FAILED !!!\n", millis() - connTime);
+            snprintf(lastError, sizeof(lastError), "Control subscribe failed");
+            pClient->disconnect();
+            state = State::ERROR;
+            return false;
+        }
+    } else {
+        Serial.printf("[DEBUG] T+%lu: !!! Control cannot notify !!!\n", millis() - connTime);
+        snprintf(lastError, sizeof(lastError), "Control char not notifiable");
+        pClient->disconnect();
+        state = State::ERROR;
+        return false;
     }
+    Serial.printf("[DEBUG] T+%lu: === STARTING DATA SUBSCRIPTION ===\n", millis() - connTime);
     if (pDataChar->canNotify()) {
-        pDataChar->subscribe(true, dataNotifyCallback);
+        Serial.printf("[DEBUG] T+%lu: Data can notify, attempting subscribe...\n", millis() - connTime);
+        if (pDataChar->subscribe(true, dataNotifyCallback)) {
+            Serial.printf("[DEBUG] T+%lu: *** Data subscription SUCCESS ***\n", millis() - connTime);
+            Serial.printf("[DEBUG] T+%lu: Connected after Data sub: %d\n", millis() - connTime, pClient->isConnected());
+        } else {
+            Serial.printf("[DEBUG] T+%lu: !!! Data subscription FAILED !!!\n", millis() - connTime);
+            snprintf(lastError, sizeof(lastError), "Data subscribe failed");
+            pClient->disconnect();
+            state = State::ERROR;
+            return false;
+        }
+    } else {
+        Serial.printf("[DEBUG] T+%lu: !!! Data cannot notify !!!\n", millis() - connTime);
+        snprintf(lastError, sizeof(lastError), "Data char not notifiable");
+        pClient->disconnect();
+        state = State::ERROR;
+        return false;
     }
     
-    state = State::CONNECTED;
+    // Set state to CONNECTED_WAITING_READY
+    // We will send CMD_HELLO only after receiving READY flag in statusNotifyCallback
+    Serial.printf("[DEBUG] T+%lu: === ALL SUBSCRIPTIONS COMPLETE ===\n", millis() - connTime);
+    Serial.printf("[DEBUG] T+%lu: Final connection check: %d\n", millis() - connTime, pClient->isConnected());
+    Serial.printf("[DEBUG] T+%lu: Setting state to CONNECTED_WAITING_READY\n", millis() - connTime);
+    
+    state = State::CONNECTED_WAITING_READY;
+    readyFlagReceived = false;
+    connectionStartTime = millis();
     device.syncing = true;
     
-    Serial.println("[SON-OF-PIG] Connected! Sending HELLO...");
+    Serial.printf("[DEBUG] T+%lu: Connected! Waiting for READY flag from Status notification...\n", millis() - connTime);
+    Serial.println("[SON-OF-PIG] *** SUBSCRIPTIONS ACTIVE - MONITORING FOR DISCONNECTION ***");
+    Mood::setStatusMessage("WAITING FOR CALL ACCEPT...");
     
-    // Send HELLO to get counts - increased delay for BLE stability
-    delay(500);
-    sendCommand(CMD_HELLO);
+    // DO NOT send CMD_HELLO here!
+    // Protocol spec: "Papa MUST wait for READY flag (0x04) before sending CMD_HELLO"
+    // CMD_HELLO will be sent from statusNotifyCallback when READY flag is received
     
     return true;
 }
 
 void CallPapaMode::disconnect() {
+    Serial.println("[SON-OF-PIG] ========== DISCONNECT() CALLED ==========");
+    Serial.printf("[SON-OF-PIG] DISCONNECT: pClient=%p, isConnected=%d, state=%d\n", 
+                  pClient, pClient ? pClient->isConnected() : -1, (int)state);
+    
     if (pClient && pClient->isConnected()) {
         pClient->disconnect();
     }
@@ -875,12 +1290,23 @@ void CallPapaMode::disconnect() {
         d.syncing = false;
     }
     
+    // Reset dialogue state and pending flags (with mutex protection)
+    dialogueState = DialogueState::IDLE;
+    dialogueTimer = 0;
+    taskENTER_CRITICAL(&pendingMux);
+    pendingHelloReceived = false;
+    pendingPMKIDCount = 0;
+    pendingHSCount = 0;
+    pendingDialogueId = 0;
+    taskEXIT_CRITICAL(&pendingMux);
+    
     Serial.println("[SON-OF-PIG] Disconnected");
 }
 
 bool CallPapaMode::isConnected() {
-    return state == State::CONNECTED || state == State::SYNCING || 
-           state == State::WAITING_CHUNKS || state == State::SYNC_COMPLETE;
+    return state == State::CONNECTED_WAITING_READY || state == State::CONNECTED || 
+           state == State::SYNCING || state == State::WAITING_CHUNKS || 
+           state == State::SYNC_COMPLETE;
 }
 
 bool CallPapaMode::startSync() {
@@ -904,10 +1330,21 @@ bool CallPapaMode::startSync() {
         // Show Papa's toxic roast
         Mood::setStatusMessage(PAPA_ROAST_RESPONSES[currentDialogueId % 3]);
         state = State::SYNC_COMPLETE;
+        progress.inProgress = false;
+        
+        // Still send PURGE to trigger Sirloin's goodbye sequence
+        sendCommand(CMD_PURGE_SYNCED);
+        
+        // Transition to goodbye after showing roast
+        dialogueTimer = millis();
+        __asm__ __volatile__("" ::: "memory");
+        dialogueState = DialogueState::GOODBYE_PAPA;
+        
         return true;
     }
     
     // Reset counters
+    totalSynced = 0;
     syncedPMKIDs = 0;
     syncedHandshakes = 0;
     currentType = 0x01;  // Start with PMKIDs
@@ -936,6 +1373,35 @@ bool CallPapaMode::isSyncing() {
 
 bool CallPapaMode::isSyncComplete() { 
     return state == State::SYNC_COMPLETE; 
+}
+
+bool CallPapaMode::isSyncDialogueComplete() {
+    return dialogueState == DialogueState::DONE;
+}
+
+uint32_t CallPapaMode::getCallDuration() {
+    if (!isConnected()) return 0;
+    return millis() - connectionStartTime;
+}
+
+uint8_t CallPapaMode::getDialoguePhase() {
+    // Map DialogueState to phase numbers for UI
+    // 0-2 = active dialogue, 3+ = done
+    switch (dialogueState.load()) {
+        case DialogueState::HELLO_PAPA:
+        case DialogueState::HELLO_SON:
+        case DialogueState::HELLO_LOOT:
+            return 0;  // Phase 0: HELLO
+        case DialogueState::SYNC_RUNNING:
+            return 1;  // Phase 1: SYNCING
+        case DialogueState::GOODBYE_PAPA:
+        case DialogueState::GOODBYE_SON:
+            return 2;  // Phase 2: GOODBYE
+        case DialogueState::DONE:
+            return 3;  // Phase 3: COMPLETE
+        default:
+            return 255;  // IDLE (no dialogue)
+    }
 }
 
 // ============================================================================
@@ -1203,4 +1669,22 @@ bool CallPapaMode::saveHandshake(const uint8_t* data, uint16_t len) {
     SDLog::log("SON-OF-PIG", "Handshake synced from Sirloin: %.*s", ssidLen, ssid);
     
     return true;
+}
+
+bool CallPapaMode::hasValidDevices() {
+    return !devices.empty();
+}
+
+bool CallPapaMode::isToastActive() {
+    if (!toastActive) return false;
+    uint32_t elapsed = millis() - toastStartTime;
+    if (elapsed > TOAST_DURATION_MS) {
+        toastActive = false;
+        return false;
+    }
+    return true;
+}
+
+const char* CallPapaMode::getToastMessage() {
+    return toastMessage.c_str();
 }

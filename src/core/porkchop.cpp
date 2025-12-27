@@ -82,7 +82,7 @@ void Porkchop::init() {
         {"DONOHAM", 14, "JAH BLESS DI RX"},
         {"WARHOG", 2, "OSCAR MIKE WITH GPS"},
         {"PIGGY BLUES", 8, "SLAY ON BLEAY"},
-        {"SON OF A PIG", 16, "SYNC FROM SIRLOIN"},
+        {"CALL PIG JUNIOR", 16, "SYNC FROM SIRLOIN"},
         {"HOG ON SPECTRUM", 10, "NIETZSCHE KNOWS"},
         // === DATA & STATS ===
         {"SWINE STATS", 11, "PIGRESSION"},
@@ -717,8 +717,17 @@ void Porkchop::updateMode() {
             break;
         case PorkchopMode::CALL_PAPA_MODE:
             CallPapaMode::update();
+            // AUTO-EXIT: When dialogue completes, exit to idle
+            {
+                bool syncComplete = CallPapaMode::isSyncDialogueComplete();
+                if (syncComplete) {
+                    Serial.println("[PORKCHOP] ========== isSyncDialogueComplete() returned TRUE ==========");
+                    Serial.println("[PORKCHOP] Sync dialogue complete - auto-exiting to IDLE");
+                    CallPapaMode::stop();
+                }
+            }
             if (!CallPapaMode::isRunning()) {
-                setMode(PorkchopMode::MENU);
+                setMode(PorkchopMode::IDLE);
             }
             break;
         default:

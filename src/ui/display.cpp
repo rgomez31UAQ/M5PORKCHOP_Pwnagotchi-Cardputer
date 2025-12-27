@@ -131,6 +131,26 @@ void Display::update() {
             Avatar::draw(mainCanvas);
             Mood::draw(mainCanvas);
             XP::drawBar(mainCanvas);  // XP bar below grass
+            
+            // Overlay Son's dialogue toast if active
+            if (CallPapaMode::isToastActive()) {
+                const char* msg = CallPapaMode::getToastMessage();
+                int toastW = 220;
+                int toastH = 24;
+                int toastX = (DISPLAY_W - toastW) / 2;
+                int toastY = MAIN_H - toastH - 5;  // Bottom of main canvas area
+                
+                // Draw toast background (FG color)
+                mainCanvas.fillRoundRect(toastX, toastY, toastW, toastH, 4, COLOR_FG);
+                mainCanvas.drawRoundRect(toastX, toastY, toastW, toastH, 4, COLOR_BG);
+                
+                // Draw centered text (BG color on FG background)
+                mainCanvas.setTextColor(COLOR_BG);
+                mainCanvas.setTextSize(1);
+                mainCanvas.setTextDatum(MC_DATUM);
+                mainCanvas.drawString(msg, toastX + toastW/2, toastY + toastH/2);
+                mainCanvas.setTextDatum(TL_DATUM);  // Reset
+            }
             break;
             
         case PorkchopMode::SPECTRUM_MODE:
@@ -495,29 +515,50 @@ void Display::drawBottomBar() {
         stats = "[D] DELETE";
     } else if (mode == PorkchopMode::CALL_PAPA_MODE) {
         // SON OF A PIG: show sync status (message only when SIRLOIN available)
-        if (CallPapaMode::isSyncing()) {
+        uint8_t phase = CallPapaMode::getDialoguePhase();
+        
+        // Priority 1: Show call duration during active dialogue (phases 0-2) - CENTERED
+        if (phase >= 0 && phase <= 2) {
+            uint32_t duration = CallPapaMode::getCallDuration();
+            uint32_t seconds = duration / 1000;
+            uint32_t minutes = seconds / 60;
+            seconds = seconds % 60;
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lu:%02lu", minutes, seconds);
+            stats = String(buf);
+        }
+        // Priority 2: Show "CALL COMPLETE" when dialogue done (phase 3)
+        else if (phase == 3) {
+            stats = "CALL COMPLETE";
+        }
+        // Priority 3: Show sync progress during actual data transfer
+        else if (CallPapaMode::isSyncing()) {
             const SyncProgress& prog = CallPapaMode::getProgress();
             char buf[48];
             snprintf(buf, sizeof(buf), "SYNC: %d/%d (%d%%)", 
                      prog.currentChunk, prog.totalChunks,
                      prog.totalChunks > 0 ? (prog.currentChunk * 100 / prog.totalChunks) : 0);
             stats = String(buf);
-        } else if (CallPapaMode::isConnected()) {
-            char buf[48];
-            snprintf(buf, sizeof(buf), "READY P:%d HS:%d [ENTER]SYNC", 
-                     CallPapaMode::getRemotePMKIDCount(),
-                     CallPapaMode::getRemoteHandshakeCount());
-            stats = String(buf);
-        } else if (CallPapaMode::isScanning()) {
+        }
+        // Priority 4: Connected - show "CALLING SON OF A PIG..."
+        else if (CallPapaMode::isConnected()) {
+            stats = "CALLING SON OF A PIG...";
+        }
+        // Priority 5: Scanning for devices
+        else if (CallPapaMode::isScanning()) {
             char buf[32];
-            snprintf(buf, sizeof(buf), "SCANNING... %d FOUND", CallPapaMode::getDeviceCount());
+            snprintf(buf, sizeof(buf), "ONLINE PIGLETS: %d FOUND", CallPapaMode::getDeviceCount());
             stats = String(buf);
-        } else if (CallPapaMode::isSirloinAvailable()) {
+        }
+        // Priority 6: Found devices but not connected
+        else if (CallPapaMode::isSirloinAvailable()) {
             // Only show PCAP YOUR PHONE message when SIRLOIN is available
             char buf[48];
             snprintf(buf, sizeof(buf), "SIRLOIN: %d READY TO PCAP YOUR PHONE", CallPapaMode::getDeviceCount());
             stats = String(buf);
-        } else {
+        }
+        // Priority 7: Idle state
+        else {
             stats = "CALLIN DIS SON OF A PIG...";
         }
     } else {
