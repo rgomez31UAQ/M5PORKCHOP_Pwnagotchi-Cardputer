@@ -22,7 +22,16 @@ int Avatar::currentX = 2;
 // Sniff animation state
 bool Avatar::isSniffing = false;
 static uint32_t sniffStartTime = 0;
-static const uint32_t SNIFF_DURATION_MS = 100;  // Hold sniff for 100ms
+static const uint32_t SNIFF_DURATION_MS = 600;  // 600ms for proper sniff cycle
+static uint8_t sniffFrame = 0;  // Alternates between nose shapes (oo, oO, Oo)
+
+// Walk transition timing
+static const uint32_t TRANSITION_DURATION_MS = 400;  // 400ms smooth walk animation (best practices §18)
+
+// Attack shake state (visual feedback for captures)
+static bool attackShakeActive = false;
+static bool attackShakeStrong = false;
+static uint32_t attackShakeRefreshTime = 0;
 
 // Grass animation state
 bool Avatar::grassMoving = false;
@@ -190,6 +199,9 @@ void Avatar::wiggleEars() {
 }
 
 void Avatar::sniff() {
+    if (!isSniffing) {
+        sniffFrame = 0;  // Reset frame on new sniff
+    }
     isSniffing = true;
     sniffStartTime = millis();
 }
@@ -197,9 +209,15 @@ void Avatar::sniff() {
 void Avatar::draw(M5Canvas& canvas) {
     uint32_t now = millis();
     
-    // Check if sniff animation should end
-    if (isSniffing && (now - sniffStartTime > SNIFF_DURATION_MS)) {
-        isSniffing = false;
+    // Sniff animation times out after SNIFF_DURATION_MS
+    // Update sniff frame for animation (cycle every 100ms)
+    if (isSniffing) {
+        if (now - sniffStartTime > SNIFF_DURATION_MS) {
+            isSniffing = false;
+            sniffFrame = 0;
+        } else {
+            sniffFrame = ((now - sniffStartTime) / 100) % 3;  // 3 frames: oo, oO, Oo
+        }
     }
     
     // Handle walk transition animation
@@ -319,9 +337,28 @@ void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool
     canvas.setTextSize(3);
     canvas.setTextColor(COLOR_ACCENT);
     
+    uint32_t now = millis();
+    
+    // Watchdog: if caller stops refreshing attack shake, auto-disable after 250ms
+    if (attackShakeRefreshTime == 0 || (now - attackShakeRefreshTime) > 250) {
+        attackShakeActive = false;
+        attackShakeStrong = false;
+    }
+    
+    // Calculate vertical shake offset
+    int shakeY = 0;
+    if (attackShakeActive) {
+        // Combat shake: random ±4px (normal) / ±6px (strong) - best practices §33
+        const int amp = attackShakeStrong ? 6 : 4;
+        shakeY = (esp_random() % 2 == 0) ? amp : -amp;
+    } else if (transitioning || grassMoving) {
+        // Walk bounce: 2px at 100ms intervals - best practices §32
+        shakeY = ((now / 100) % 2 == 0) ? 2 : 0;
+    }
+    
     // Use animated currentX position (set during transition or at rest)
     int startX = currentX;
-    int startY = 5;
+    int startY = 5 + shakeY;  // Apply shake offset
     int lineHeight = 22;
     
     for (uint8_t i = 0; i < lines; i++) {
@@ -329,7 +366,15 @@ void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool
         if (i == 2) {
             char bodyLine[16];
             bool tailOnLeft = false;  // Track if tail prefix added (needs X offset)
-            if (transitioning) {
+            if (grassMoving || pendingGrassStart) {
+                // Treadmill mode: always show tail
+                if (faceRight) {
+                    strncpy(bodyLine, "z(    )", sizeof(bodyLine));  // Tail on left when facing right
+                    tailOnLeft = true;
+                } else {
+                    strncpy(bodyLine, "(    )z", sizeof(bodyLine));  // Tail on right when facing left
+                }
+            } else if (transitioning) {
                 // During transition: show tail on trailing side
                 bool movingRight = (transitionToX > transitionFromX);
                 if (movingRight) {
@@ -378,15 +423,22 @@ void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool
             }
             
             if (sniff) {
-                // Replace nose 00 with oo for sniff
+                // Animated sniff - cycle through nose shapes
+                char n1, n2;
+                switch (sniffFrame) {
+                    case 0: n1 = 'o'; n2 = 'o'; break;  // oo
+                    case 1: n1 = 'o'; n2 = 'O'; break;  // oO
+                    case 2: n1 = 'O'; n2 = 'o'; break;  // Oo
+                    default: n1 = 'o'; n2 = 'o'; break;
+                }
                 // Nose is at positions 3-4 for right-facing "(X 00)"
                 // Nose is at positions 1-2 for left-facing "(00 X)"
                 if (faceRight) {
-                    modifiedLine[3] = 'o';  // First 0 -> o
-                    modifiedLine[4] = 'o';  // Second 0 -> o
+                    modifiedLine[3] = n1;
+                    modifiedLine[4] = n2;
                 } else {
-                    modifiedLine[1] = 'o';  // First 0 -> o
-                    modifiedLine[2] = 'o';  // Second 0 -> o
+                    modifiedLine[1] = n1;
+                    modifiedLine[2] = n2;
                 }
             }
             
@@ -428,9 +480,12 @@ void Avatar::setGrassMoving(bool moving, bool directionRight) {
             pendingGrassStart = false;
         }
     } else {
-        // Stop grass immediately
+        // Stop grass and coast back to resting position (X=2, facing left)
         grassMoving = false;
         pendingGrassStart = false;
+        
+        // Coast back to left edge resting position
+        startWindupSlide(2, false);  // X=2, face left when done
     }
 }
 
@@ -494,4 +549,35 @@ void Avatar::drawGrass(M5Canvas& canvas) {
     // Draw at bottom of avatar area, full screen width
     int grassY = 73;  // Below the pig face
     canvas.drawString(grassPattern, 0, grassY);
+}
+
+// --- Phase 8: Direction control helpers ---
+void Avatar::setFacingLeft() {
+    facingRight = false;
+}
+
+void Avatar::setFacingRight() {
+    facingRight = true;
+}
+
+// --- Phase 2: Attack shake control ---
+void Avatar::setAttackShake(bool active, bool strong) {
+    attackShakeActive = active;
+    attackShakeStrong = strong;
+    attackShakeRefreshTime = active ? millis() : 0;
+}
+
+// --- Phase 6: Windup slide for coast-back ---
+void Avatar::startWindupSlide(int targetX, bool faceRight) {
+    // Start a smooth transition to target position
+    // Uses standard TRANSITION_DURATION_MS (300ms) from draw() logic
+    if (currentX != targetX) {
+        transitioning = true;
+        transitionFromX = currentX;
+        transitionToX = targetX;
+        transitionStartTime = millis();
+        transitionToFacingRight = faceRight;
+    }
+    // Set facing direction for when transition completes
+    facingRight = faceRight;
 }

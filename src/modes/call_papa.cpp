@@ -299,14 +299,8 @@ void dataNotifyCallback(NimBLERemoteCharacteristic* pChar,
             
             if (success) {
                 CallPapaMode::totalSynced++;
-                
-                char msg[32];
-                snprintf(msg, sizeof(msg), "%s #%d SAVED!", 
-                         CallPapaMode::currentType == 0x01 ? "PMKID" : "HS", 
-                         CallPapaMode::currentIndex + 1);
-                Mood::setStatusMessage(msg);  // Non-blocking mood update
-                
-                Mood::onPMKIDCaptured("SIRLOIN");  // Use generic callback
+                // Mood celebration removed - happens after dialogue completes
+                // Silent transfer prevents dialogue message corruption
             }
             
             // Mark synced on Sirloin
@@ -356,24 +350,14 @@ void dataNotifyCallback(NimBLERemoteCharacteristic* pChar,
 // Called when Status characteristic notifies (state updates from Sirloin)
 void statusNotifyCallback(NimBLERemoteCharacteristic* pChar,
                           uint8_t* pData, size_t length, bool isNotify) {
-    Serial.printf("[DEBUG-CB] >>> statusNotifyCallback ENTRY (length=%d, isNotify=%d)\n", length, isNotify);
+    // CRITICAL: Minimal processing only - avoid Serial.printf() which blocks for ~5ms each
     if (!CallPapaMode::isRunning()) return;  // Guard: don't process if stopped
     
     // Status structure: [0x50][0x43][pending_lo][pending_hi][flags][0x00]
-    if (length < 6) {
-        Serial.printf("[SON-OF-PIG] Invalid status notification length: %d\n", length);
-        return;
-    }
+    if (length < 6) return;
     
-    // DEBUG: Print raw Status bytes
-    Serial.printf("[SON-OF-PIG] Status RAW: [0x%02X][0x%02X][0x%02X][0x%02X][0x%02X][0x%02X]\n",
-                  pData[0], pData[1], pData[2], pData[3], pData[4], pData[5]);
-    
-    // Verify protocol magic
-    if (pData[0] != STATUS_MAGIC_P || pData[1] != STATUS_MAGIC_C) {
-        Serial.printf("[SON-OF-PIG] Invalid status magic: 0x%02X 0x%02X\n", pData[0], pData[1]);
-        return;
-    }
+    // Verify protocol magic (fast check, no printf)
+    if (pData[0] != STATUS_MAGIC_P || pData[1] != STATUS_MAGIC_C) return;
     
     // Parse status fields
     uint16_t pending = pData[2] | (pData[3] << 8);
@@ -385,19 +369,21 @@ void statusNotifyCallback(NimBLERemoteCharacteristic* pChar,
     
     CallPapaMode::remotePendingCount = pending;
     
-    Serial.printf("[SON-OF-PIG] Status: pending=%d, ready=%d, syncing=%d, bufferFull=%d\n",
-                  pending, ready, syncing, bufferFull);
-    
-    // Update UI with buffer full warning
-    if (bufferFull) {
-        Mood::setStatusMessage("SIRLOIN BUFFER FULL!");
-        Serial.println("[SON-OF-PIG] WARNING: Sirloin buffer at capacity (256 captures)");
+    // Update UI with buffer full warning (only when changed to reduce overhead)
+    static bool lastBufferFull = false;
+    if (bufferFull && !lastBufferFull) {
+        // Only show warning when dialogue NOT active (prevents interrupting Papa/Son conversation)
+        if (dialogueState == DialogueState::IDLE || dialogueState == DialogueState::DONE) {
+            Mood::setStatusMessage("SIRLOIN BUFFER FULL!");
+        }
+        lastBufferFull = true;
+    } else if (!bufferFull && lastBufferFull) {
+        lastBufferFull = false;
     }
     
     // CRITICAL: Wait for READY flag before sending CMD_HELLO
     if (ready && !CallPapaMode::readyFlagReceived) {
         CallPapaMode::readyFlagReceived = true;
-        Serial.println("[SON-OF-PIG] READY flag received! User accepted call. Sending CMD_HELLO...");
         
         // Update state and send HELLO
         CallPapaMode::state = CallPapaMode::State::CONNECTED;
@@ -405,9 +391,6 @@ void statusNotifyCallback(NimBLERemoteCharacteristic* pChar,
         
         // Send CMD_HELLO now that we're ready (no delay in callback!)
         CallPapaMode::sendCommand(CMD_HELLO);
-    } else if (!ready && CallPapaMode::state == CallPapaMode::State::CONNECTED_WAITING_READY) {
-        // Still waiting for user to accept
-        Serial.println("[SON-OF-PIG] Still waiting for user to accept call...");
     }
 }
 
@@ -660,6 +643,8 @@ void CallPapaMode::requestNextCapture() {
             // Memory barrier ensures timer write completes before state write (prevents reordering)
             __asm__ __volatile__("" ::: "memory");
             dialogueState = DialogueState::GOODBYE_PAPA;
+            Serial.printf("[DEBUG-ISSUE3] >>> GOODBYE_PAPA set at T=%lu, dialogueTimer=%lu\n", 
+                          millis(), (uint32_t)dialogueTimer.load());
             Mood::setStatusMessage(PAPA_COMPLETE_RESPONSES[currentDialogueId]);
             
             Mood::adjustHappiness(30);  // Big happiness boost for successful sync
@@ -919,6 +904,14 @@ void CallPapaMode::update() {
     // === DIALOGUE STATE MACHINE ===
     // Process dialogue exchanges without blocking BLE callbacks
     if (dialogueState != DialogueState::IDLE && dialogueState != DialogueState::SYNC_RUNNING) {
+        // DEBUG: Trace state machine entry
+        static uint32_t lastStateDebug = 0;
+        if (now - lastStateDebug > 1000) {
+            Serial.printf("[DEBUG-ISSUE3] StateMachine: dialogueState=%d, timer=%lu, elapsed=%lu\n",
+                          (int)dialogueState.load(), (uint32_t)dialogueTimer.load(), now - (uint32_t)dialogueTimer.load());
+            lastStateDebug = now;
+        }
+        
         // Watchdog: if stuck in GOODBYE phase for >10s, force completion
         if ((dialogueState == DialogueState::GOODBYE_PAPA || dialogueState == DialogueState::GOODBYE_SON) && 
             now - dialogueTimer > 10000) {
@@ -968,6 +961,7 @@ void CallPapaMode::update() {
                     
                 case DialogueState::GOODBYE_PAPA:
                     // Papa spoke, now Son responds (toast overlay)
+                    Serial.printf("[DEBUG-ISSUE3] >>> GOODBYE_PAPA -> GOODBYE_SON at T=%lu\n", millis());
                     toastMessage = "SON: " + String(SON_COMPLETE_RESPONSES[currentDialogueId]);
                     toastStartTime = now;
                     toastActive = true;
@@ -977,11 +971,32 @@ void CallPapaMode::update() {
                     
                 case DialogueState::GOODBYE_SON:
                     // Done with dialogue
+                    Serial.printf("[DEBUG-ISSUE3] >>> GOODBYE_SON -> DONE at T=%lu\n", millis());
                     dialogueState = DialogueState::DONE;
                     break;
                     
                 default:
                     break;
+            }
+        }
+        
+        // CRITICAL TIMEOUT: If stuck in SYNC_RUNNING for >60s, force completion
+        // This prevents "session never closes" bug when dialogue gets stuck
+        if (dialogueState == DialogueState::SYNC_RUNNING) {
+            if (now - dialogueTimer > 60000) {  // 60 second timeout
+                Serial.println("[SON-OF-PIG] TIMEOUT: SYNC_RUNNING exceeded 60s, forcing GOODBYE");
+                Serial.printf("[SON-OF-PIG] state=%d, synced=%d/%d\n", (int)state, totalSynced, remotePMKIDCount + remoteHSCount);
+                
+                // Force transition to goodbye phase
+                dialogueTimer = now;
+                __asm__ __volatile__("" ::: "memory");
+                dialogueState = DialogueState::GOODBYE_PAPA;
+                Mood::setStatusMessage("SYNC TIMEOUT!");
+                
+                // If we synced anything, still celebrate
+                if (totalSynced > 0 && onSyncCompleteCb) {
+                    onSyncCompleteCb(syncedPMKIDs, syncedHandshakes);
+                }
             }
         }
     }
@@ -1272,7 +1287,26 @@ void CallPapaMode::disconnect() {
     Serial.printf("[SON-OF-PIG] DISCONNECT: pClient=%p, isConnected=%d, state=%d\n", 
                   pClient, pClient ? pClient->isConnected() : -1, (int)state);
     
+    // CRITICAL FIX: Unsubscribe from all characteristics BEFORE disconnect
+    // This prevents mbuf pool exhaustion by freeing notification resources
     if (pClient && pClient->isConnected()) {
+        if (pStatusChar) {
+            Serial.println("[SON-OF-PIG] Unsubscribing from Status notifications...");
+            pStatusChar->unsubscribe();
+            delay(50);  // Allow BLE stack to process unsubscribe
+        }
+        if (pCtrlChar) {
+            Serial.println("[SON-OF-PIG] Unsubscribing from Control notifications...");
+            pCtrlChar->unsubscribe();
+            delay(50);
+        }
+        if (pDataChar) {
+            Serial.println("[SON-OF-PIG] Unsubscribing from Data notifications...");
+            pDataChar->unsubscribe();
+            delay(50);
+        }
+        
+        Serial.println("[SON-OF-PIG] All characteristics unsubscribed, disconnecting...");
         pClient->disconnect();
     }
     
@@ -1548,15 +1582,42 @@ bool CallPapaMode::saveHandshake(const uint8_t* data, uint16_t len) {
     // Parse and write frames from data
     uint16_t offset = 48 + beaconLen;  // Skip header + beacon
     
-    // Write beacon if present
+    // Track first EAPOL timestamp for beacon (avoid timestamp mismatch)
+    uint32_t firstEAPOLTimestamp = 0;
+    
+    // Parse and collect first EAPOL timestamp before writing packets
+    // This ensures beacon and EAPOL frames have consistent timestamps
+    uint16_t scanOffset = 48 + beaconLen;
+    while (scanOffset < len && firstEAPOLTimestamp == 0) {
+        if (scanOffset + 2 > len) break;
+        uint16_t scanEapolLen = data[scanOffset] | (data[scanOffset + 1] << 8);
+        scanOffset += 2;
+        if (scanOffset + scanEapolLen > len) break;
+        scanOffset += scanEapolLen;
+        
+        if (scanOffset + 2 > len) break;
+        uint16_t scanFullLen = data[scanOffset] | (data[scanOffset + 1] << 8);
+        scanOffset += 2;
+        if (scanOffset + scanFullLen + 6 > len) break;  // +6 for msg_num, rssi, timestamp
+        scanOffset += scanFullLen + 2;  // Skip full frame + msg_num + rssi
+        
+        if (scanOffset + 4 <= len) {
+            firstEAPOLTimestamp = data[scanOffset] | (data[scanOffset + 1] << 8) |
+                                 (data[scanOffset + 2] << 16) | (data[scanOffset + 3] << 24);
+            break;
+        }
+        scanOffset += 4;
+    }
+    
+    // Write beacon if present (use first EAPOL timestamp for consistency)
     if (beaconLen > 0) {
         const uint8_t* beaconData = data + 48;
         
         // Radiotap header (minimal 8 bytes)
         uint8_t radiotap[] = {0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00};
         
-        // PCAP packet header
-        uint32_t ts = millis() / 1000;
+        // PCAP packet header - use first EAPOL timestamp (not millis!)
+        uint32_t ts = firstEAPOLTimestamp > 0 ? firstEAPOLTimestamp : (millis() / 1000);
         struct __attribute__((packed)) {
             uint32_t ts_sec;
             uint32_t ts_usec;
@@ -1626,8 +1687,8 @@ bool CallPapaMode::saveHandshake(const uint8_t* data, uint16_t len) {
                 uint32_t incl_len;
                 uint32_t orig_len;
             } pktHeader = {
-                timestamp / 1000,
-                (timestamp % 1000) * 1000,
+                timestamp,      // Already Unix epoch seconds from Sirloin RTC
+                0,              // No microsecond precision available
                 totalLen,
                 totalLen
             };

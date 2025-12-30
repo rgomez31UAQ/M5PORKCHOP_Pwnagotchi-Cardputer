@@ -57,6 +57,25 @@ KEYINFO_BIT_ACK     = 7   # bit 7: Key Ack (AP says "got it", STA says nothing)
 KEYINFO_BIT_MIC     = 8   # bit 8: Key MIC (proof you're not making shit up)
 KEYINFO_BIT_SECURE  = 9   # bit 9: Secure (encrypted, for real this time)
 
+# EAPOL-Key frame offsets (after 0x888E ethertype)
+# +0: version (1 byte)
+# +1: reserved (1 byte)  
+# +2: type (1 byte) - 0x03 = Key
+# +3: length (2 bytes, big-endian)
+# +5: descriptor type (1 byte) - 0x02 = RSN, 0xFE = WPA
+# +6: key info (2 bytes, big-endian)
+# +8: key length (2 bytes)
+# +10: replay counter (8 bytes)
+# +18: key nonce (32 bytes) <-- THE MONEY SHOT
+# +50: key IV (16 bytes)
+# +66: key RSC (8 bytes)
+# +74: reserved (8 bytes)
+# +82: key MIC (16 bytes)
+# +98: key data length (2 bytes)
+# +100: key data (variable)
+EAPOL_KEY_NONCE_OFFSET = 18  # offset from EAPOL header start (after 888E + version byte)
+EAPOL_KEY_NONCE_SIZE = 32
+
 
 # =============================================================================
 # CLASSES - because even hackers appreciate structure
@@ -80,6 +99,7 @@ class PcapAnalysis:
         self.has_beacon = False
         self.beacon_ssid = None
         self.eapol_frames = []  # list of M1, M2, M3, M4
+        self.eapol_nonces = {}  # dict: M1/M2/M3/M4 -> nonce bytes (32 bytes each)
         self.packet_count = 0
         self.errors = []
         
@@ -100,6 +120,27 @@ class PcapAnalysis:
         return 'M4' in self.eapol_frames
     
     @property
+    def has_anonce(self):
+        """ANonce is in M1 (and M3). Check if M1 has non-zero nonce."""
+        nonce = self.eapol_nonces.get('M1', b'\x00' * 32)
+        return nonce != b'\x00' * 32
+    
+    @property
+    def has_snonce(self):
+        """SNonce is ONLY in M2. M4 nonce field is typically zero."""
+        nonce = self.eapol_nonces.get('M2', b'\x00' * 32)
+        return nonce != b'\x00' * 32
+    
+    @property
+    def m4_has_snonce(self):
+        """
+        Check if M4 copied SNonce (some clients do, most don't).
+        This is the critical check for M1+M4 pairs.
+        """
+        nonce = self.eapol_nonces.get('M4', b'\x00' * 32)
+        return nonce != b'\x00' * 32
+    
+    @property
     def full_handshake(self):
         """all four horsemen present and accounted for"""
         return self.has_m1 and self.has_m2 and self.has_m3 and self.has_m4
@@ -110,29 +151,76 @@ class PcapAnalysis:
         wpa-sec minimum requirements:
         1. valid pcap with radiotap
         2. beacon frame (they need the ESSID, obviously)
-        3. at least M2 or M4 (the ones with the goodies)
+        3. CRACKABLE handshake pair
+        
+        CRITICAL: M1+M4 is NOT crackable unless M4 has SNonce!
+        - M1+M2: BEST - M1 has ANonce, M2 has SNonce + MIC
+        - M2+M3: GOOD - M2 has SNonce + MIC, M3 has ANonce + MIC
+        - M1+M4: RISKY - only works if M4 copied SNonce (most clients don't!)
+        - M3+M4: RISKY - M3 has ANonce, M4 needs SNonce (most clients zero it)
         
         without beacon, hcxpcapngtool will cry and refuse to cooperate.
         we've all been there, hcxpcapngtool. we've all been there.
         """
-        return (self.magic_ok and 
-                self.linktype_ok and 
-                self.radiotap_ok and 
-                self.has_beacon and 
-                (self.has_m2 or self.has_m4))
+        if not (self.magic_ok and self.linktype_ok and self.radiotap_ok and self.has_beacon):
+            return False
+        
+        # Check for valid crackable pairs
+        return self.has_crackable_pair
+    
+    @property
+    def has_crackable_pair(self):
+        """
+        Determine if we have a TRULY crackable handshake pair.
+        
+        PTK derivation requires: PMK, AA, SA, ANonce, SNonce
+        - ANonce: in M1, M3
+        - SNonce: in M2 (and SOMETIMES copied to M4 by some clients)
+        
+        Valid pairs:
+        - M1+M2: ANonce from M1, SNonce from M2 ✅
+        - M2+M3: SNonce from M2, ANonce from M3 ✅  
+        - M1+M4: ONLY if M4 has SNonce (rare!) ⚠️
+        - M3+M4: ONLY if M4 has SNonce (rare!) ⚠️
+        
+        Most common failure: M1+M4 where M4 nonce is all zeros.
+        wpa-sec will reject it. hashcat will fail. tears will flow.
+        """
+        # M2 is the gold standard - it ALWAYS has SNonce
+        if self.has_m2:
+            if self.has_m1 or self.has_m3:
+                return True
+        
+        # M1+M4 or M3+M4 without M2: check if M4 has SNonce
+        if self.has_m4 and (self.has_m1 or self.has_m3):
+            if self.m4_has_snonce:
+                return True
+            else:
+                self.errors.append(
+                    "M1+M4 or M3+M4 pair detected but M4 nonce is all zeros. "
+                    "SNonce is ONLY in M2. This capture is UNCRACKABLE without M2."
+                )
+                return False
+        
+        return False
     
     @property
     def hashcat_ready(self):
         """
         hashcat 22000 needs:
         - beacon (ESSID)
+        - CRACKABLE pair (see has_crackable_pair)
+        
+        OLD LOGIC (WRONG):
         - M2 (has SNonce) or M4 (has everything)
         
-        technically M1+M2 is the minimum for a challenge.
-        M2+M3 or M3+M4 also work. it's complicated.
-        like my relationship with 802.11.
+        NEW LOGIC (CORRECT):
+        - M2 is required unless M4 has SNonce (rare)
+        
+        if you only have M1+M4 with zero-nonce M4, hashcat will compute
+        garbage PTK candidates and never find the password. ever.
         """
-        return self.has_beacon and (self.has_m2 or self.has_m4)
+        return self.has_beacon and self.has_crackable_pair
 
 
 # =============================================================================
@@ -403,22 +491,40 @@ def analyze_pcap(filepath):
         if eapol_pos != -1:
             # found EAPOL ethertype!
             # EAPOL structure after ethertype:
-            # - version: 1 byte (we don't care)
-            # - type: 1 byte (0x03 = Key)
-            # - length: 2 bytes
-            # - descriptor type: 1 byte
-            # - key info: 2 bytes (this is the money shot)
+            # +0: version (1 byte)
+            # +1: reserved (1 byte)
+            # +2: type (1 byte) - 0x03 = Key
+            # +3: length (2 bytes, big-endian)
+            # +5: descriptor type (1 byte)
+            # +6: key info (2 bytes, big-endian)
+            # +8: key length (2 bytes)
+            # +10: replay counter (8 bytes)
+            # +18: nonce (32 bytes) <-- THIS IS THE MONEY SHOT
             
-            if eapol_pos + 9 <= packet_end:  # need at least 9 bytes after ethertype
-                eapol_type = data[eapol_pos + 3]
+            # Need: ethertype(2) + version(1) + reserved(1) + type(1) + len(2) + 
+            #       desc(1) + keyinfo(2) + keylen(2) + replay(8) + nonce(32) = 52 bytes
+            if eapol_pos + 52 <= packet_end:
+                eapol_type = data[eapol_pos + 4]  # type at offset +4 from ethertype start
                 
                 if eapol_type == EAPOL_TYPE_KEY:
-                    # key info is at offset +7, +8 from ethertype (big-endian)
-                    key_info = read_uint16_be(data, eapol_pos + 7)
+                    # key info is at offset +8 from ethertype (big-endian)
+                    key_info = read_uint16_be(data, eapol_pos + 8)
                     msg_type = classify_eapol_frame(key_info)
                     
                     if msg_type:
                         result.eapol_frames.append(msg_type)
+                        
+                        # Extract nonce (32 bytes at offset +20 from ethertype)
+                        # EAPOL header: ethertype(2) + version(1) + reserved(1) + type(1) + 
+                        #               len(2) + desc(1) + keyinfo(2) + keylen(2) + replay(8) = 20
+                        nonce_start = eapol_pos + 20
+                        nonce_end = nonce_start + EAPOL_KEY_NONCE_SIZE
+                        
+                        if nonce_end <= packet_end:
+                            nonce = bytes(data[nonce_start:nonce_end])
+                            # Store first nonce seen for each message type
+                            if msg_type not in result.eapol_nonces:
+                                result.eapol_nonces[msg_type] = nonce
         
         offset = packet_end
     
@@ -457,11 +563,13 @@ def print_result(result, verbose=False):
     if result.has_beacon:
         flags.append("BCN")
     
-    # handshake status
+    # handshake status with nonce validation
     if result.full_handshake:
         hs_status = "[FULL-4WAY]"
-    elif result.hashcat_ready:
+    elif result.has_crackable_pair:
         hs_status = "[HASHCAT]"
+    elif result.eapol_frames and not result.has_m2 and (result.has_m4 and not result.m4_has_snonce):
+        hs_status = "[NO-SNONCE]"  # M1+M4 without SNonce = uncrackable
     elif result.eapol_frames:
         hs_status = "[PARTIAL]"
     else:
@@ -472,6 +580,16 @@ def print_result(result, verbose=False):
     if verbose:
         if result.beacon_ssid:
             print(f"   SSID: {result.beacon_ssid}")
+        
+        # Show nonce status
+        if result.eapol_nonces:
+            print(f"   Nonces:")
+            for msg, nonce in result.eapol_nonces.items():
+                is_zero = nonce == b'\x00' * 32
+                nonce_hex = nonce[:8].hex() + "..." if not is_zero else "ALL ZEROS"
+                status_icon = "❌" if is_zero else "✅"
+                print(f"      {msg}: {status_icon} {nonce_hex}")
+        
         if result.errors:
             for err in result.errors:
                 print(f"   ⚠️  {err}")
@@ -486,6 +604,7 @@ def print_summary(results):
     wpasec_ok = sum(1 for r in results if r.wpasec_compatible)
     full_hs = sum(1 for r in results if r.full_handshake)
     has_beacon = sum(1 for r in results if r.has_beacon)
+    no_snonce = sum(1 for r in results if r.eapol_frames and not r.has_crackable_pair)
     
     print("\n" + "="*70)
     print("SUMMARY")
@@ -494,6 +613,8 @@ def print_summary(results):
     print(f"WPA-SEC compatible:    {wpasec_ok}/{total} ({100*wpasec_ok//total if total else 0}%)")
     print(f"Full 4-way handshake:  {full_hs}/{total}")
     print(f"Has beacon frame:      {has_beacon}/{total}")
+    if no_snonce > 0:
+        print(f"Missing SNonce (M1+M4): {no_snonce}/{total} ⚠️")
     
     if wpasec_ok < total:
         print("\n⚠️  Some files may fail WPA-SEC upload:")
@@ -502,12 +623,16 @@ def print_summary(results):
                 reasons = []
                 if not r.has_beacon:
                     reasons.append("missing beacon")
-                if not r.has_m2 and not r.has_m4:
+                if r.has_m4 and not r.has_m2 and not r.m4_has_snonce:
+                    reasons.append("M1+M4 without SNonce (UNCRACKABLE)")
+                elif not r.has_m2 and not r.has_m4:
                     reasons.append("no M2/M4 frames")
                 if not r.magic_ok:
                     reasons.append("invalid pcap")
                 if not r.linktype_ok:
                     reasons.append("wrong linktype")
+                if r.errors:
+                    reasons.extend(r.errors)
                 print(f"   - {r.filename}: {', '.join(reasons)}")
 
 

@@ -28,8 +28,18 @@ public:
     static void setMoodIntensity(int intensity);  // -100 to 100, affects blink/flip rates
     
     static void blink();
-    static void sniff();  // Trigger nose sniff animation (100ms hold)
+    static void sniff();  // Trigger nose sniff animation (600ms animated cycle)
     static void wiggleEars();
+    
+    // Direction control
+    static void setFacingLeft();
+    static void setFacingRight();
+    
+    // Attack shake (visual feedback for captures)
+    static void setAttackShake(bool active, bool strong);
+    
+    // Walk wind-up animation (smooth slide for coast-back)
+    static void startWindupSlide(int targetX, bool faceRight = false);
     
     // Grass animation control (direction: true=right, false=left)
     static void setGrassMoving(bool moving, bool directionRight = true);

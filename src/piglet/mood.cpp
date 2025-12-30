@@ -841,6 +841,9 @@ void Mood::onHandshakeCaptured(const char* apName) {
     // Sniff animation - caught something big!
     Avatar::sniff();
     
+    // Phase 2: Attack shake - strong shake for captures!
+    Avatar::setAttackShake(true, true);
+    
     // Award XP for handshake capture
     XP::addXP(XPEvent::HANDSHAKE_CAPTURED);
     
@@ -912,6 +915,9 @@ void Mood::onPMKIDCaptured(const char* apName) {
     
     // Sniff animation - stealthy capture!
     Avatar::sniff();
+    
+    // Phase 2: Attack shake - strong shake for captures!
+    Avatar::setAttackShake(true, true);
     
     // Award XP for PMKID capture
     // If in DO NO HAM mode, award the rare ghost PMKID XP (100 XP!)
@@ -1523,38 +1529,66 @@ void Mood::draw(M5Canvas& canvas) {
     }
     if (numLines == 0) numLines = 1;  // At least 1 line
     
-    // Position bubble based on pig SCREEN POSITION (not facing direction)
-    // Pig on left side = bubble on right
-    // Pig on right side = bubble on left
-    bool pigOnRight = Avatar::isOnRightSide();
+    // Phase 3: Context-aware 3-mode bubble positioning based on pig X position
+    // Mode 1 (LEFT): pigX < 30  → bubble right (X=120), arrow left
+    // Mode 2 (CENTER): 30 <= pigX <= 102 → bubble center-top (X=62), arrow down
+    // Mode 3 (RIGHT): pigX > 102 → bubble left (X=4), arrow right
+    int pigX = Avatar::getCurrentX();
+    
     int bubbleW = 116;  // Fixed bubble width
-    int bubbleX = pigOnRight ? 4 : 120;  // Left side if pig is on right, right side if pig is on left
-    int bubbleY = 3;
+    int bubbleX, bubbleY;
     int lineHeight = 11;
     int bubbleH = 8 + (numLines * lineHeight);  // Padding + actual lines
     
     // Cap bubble height to fit above grass (y=73)
     if (bubbleH > 70) bubbleH = 70;
     
+    // Determine bubble mode based on pigX thresholds
+    enum class BubbleMode { LEFT_SIDE, CENTER_TOP, RIGHT_SIDE };
+    BubbleMode mode;
+    
+    if (pigX < 30) {
+        mode = BubbleMode::LEFT_SIDE;  // Pig on left edge → bubble on right
+        bubbleX = 120;
+        bubbleY = 3;  // Edge position: Y=3
+    } else if (pigX > 102) {
+        mode = BubbleMode::RIGHT_SIDE;  // Pig on right edge → bubble on left
+        bubbleX = 4;
+        bubbleY = 3;  // Edge position: Y=3
+    } else {
+        mode = BubbleMode::CENTER_TOP;  // Pig in center → bubble centered above
+        bubbleX = 62;  // Centered on 240px screen
+        bubbleY = 2;   // Center position: Y=2 (tighter fit)
+    }
+    
     // Draw filled bubble with pink background
     canvas.fillRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 6, COLOR_FG);
     
     // Draw filled triangle arrow pointing to piglet (comic-style speech bubble tail)
-    // Arrow direction depends on bubble position
-    int arrowTipY = bubbleY + bubbleH / 2;    // Vertically centered on bubble
-    int arrowTopY = arrowTipY - 5;
-    int arrowBottomY = arrowTipY + 5;
-    
-    if (pigOnRight) {
+    if (mode == BubbleMode::LEFT_SIDE) {
+        // Pig on left, bubble on right, arrow points LEFT toward pig
+        int arrowTipY = bubbleY + bubbleH / 2;
+        int arrowTopY = arrowTipY - 5;
+        int arrowBottomY = arrowTipY + 5;
+        int arrowTipX = bubbleX - 8;
+        int arrowBaseX = bubbleX;
+        canvas.fillTriangle(arrowTipX, arrowTipY, arrowBaseX, arrowTopY, arrowBaseX, arrowBottomY, COLOR_FG);
+    } else if (mode == BubbleMode::RIGHT_SIDE) {
         // Pig on right, bubble on left, arrow points RIGHT toward pig
+        int arrowTipY = bubbleY + bubbleH / 2;
+        int arrowTopY = arrowTipY - 5;
+        int arrowBottomY = arrowTipY + 5;
         int arrowTipX = bubbleX + bubbleW + 8;
         int arrowBaseX = bubbleX + bubbleW;
         canvas.fillTriangle(arrowTipX, arrowTipY, arrowBaseX, arrowTopY, arrowBaseX, arrowBottomY, COLOR_FG);
     } else {
-        // Pig on left, bubble on right, arrow points LEFT toward pig
-        int arrowTipX = bubbleX - 8;
-        int arrowBaseX = bubbleX;
-        canvas.fillTriangle(arrowTipX, arrowTipY, arrowBaseX, arrowTopY, arrowBaseX, arrowBottomY, COLOR_FG);
+        // Center mode: arrow points DOWN toward pig (below bubble)
+        int arrowTipX = bubbleX + bubbleW / 2;
+        int arrowTipY = bubbleY + bubbleH + 8;
+        int arrowLeftX = arrowTipX - 5;
+        int arrowRightX = arrowTipX + 5;
+        int arrowBaseY = bubbleY + bubbleH;
+        canvas.fillTriangle(arrowTipX, arrowTipY, arrowLeftX, arrowBaseY, arrowRightX, arrowBaseY, COLOR_FG);
     }
     
     // Draw phrase inside bubble with word wrapping - BLACK text on pink

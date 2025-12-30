@@ -720,9 +720,27 @@ void Porkchop::updateMode() {
             // AUTO-EXIT: When dialogue completes, exit to idle
             {
                 bool syncComplete = CallPapaMode::isSyncDialogueComplete();
+                // DEBUG-ISSUE3: Trace auto-exit check
+                static uint32_t lastExitDebug = 0;
+                if (millis() - lastExitDebug > 2000) {
+                    Serial.printf("[DEBUG-ISSUE3] Auto-exit check: isSyncDialogueComplete()=%d\n", syncComplete);
+                    lastExitDebug = millis();
+                }
                 if (syncComplete) {
                     Serial.println("[PORKCHOP] ========== isSyncDialogueComplete() returned TRUE ==========");
                     Serial.println("[PORKCHOP] Sync dialogue complete - auto-exiting to IDLE");
+                    
+                    // Celebrate AFTER disconnect (not during transfer)
+                    uint16_t synced = CallPapaMode::getTotalSynced();
+                    if (synced > 0) {
+                        char celebrationMsg[64];
+                        snprintf(celebrationMsg, sizeof(celebrationMsg), 
+                                "SYNCED %d FROM SIRLOIN!", synced);
+                        Mood::setStatusMessage(celebrationMsg);
+                        Mood::adjustHappiness(30);  // Big happiness boost
+                        Serial.printf("[PORKCHOP] Celebration: %s\n", celebrationMsg);
+                    }
+                    
                     CallPapaMode::stop();
                 }
             }
